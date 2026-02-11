@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import logging
 import os
+import signal
+import sys
 import tempfile
 import uuid
 from pathlib import Path
 
 import torch
-from arq import create_pool
 from arq.connections import RedisSettings
 from dotenv import load_dotenv
 from PIL import Image
@@ -40,6 +41,29 @@ REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
 MIST_EPSILON: int = int(os.getenv("MIST_EPSILON", "8"))
 MIST_STEPS: int = int(os.getenv("MIST_STEPS", "3"))
 R2_BUCKET: str = os.getenv("R2_BUCKET_NAME", "")
+
+
+# ---------------------------------------------------------------------------
+# GPU diagnostics (logged at startup for SaladCloud verification)
+# ---------------------------------------------------------------------------
+def _log_gpu_info() -> None:
+    """Log CUDA availability and GPU details."""
+    cuda_available = torch.cuda.is_available()
+    logger.info("CUDA available: %s", cuda_available)
+    logger.info("PyTorch version: %s", torch.__version__)
+    logger.info("CUDA build version: %s", torch.version.cuda or "N/A")
+
+    if cuda_available:
+        device_count = torch.cuda.device_count()
+        logger.info("GPU count: %d", device_count)
+        for i in range(device_count):
+            name = torch.cuda.get_device_name(i)
+            mem = torch.cuda.get_device_properties(i).total_mem
+            mem_gb = mem / (1024 ** 3)
+            logger.info("  GPU %d: %s (%.1f GB VRAM)", i, name, mem_gb)
+        logger.info("Current device: %s", torch.cuda.current_device())
+    else:
+        logger.warning("No CUDA GPU detected — will use CPU (slow)")
 
 
 # ---------------------------------------------------------------------------
@@ -139,10 +163,28 @@ class WorkerSettings:
     job_timeout = 600  # 10 minutes per image
 
 
+# ---------------------------------------------------------------------------
+# Entrypoint
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    import asyncio
-
     from arq import run_worker
 
-    logger.info("Starting GPU Worker...")
+    # --- Startup diagnostics ---
+    logger.info("=" * 60)
+    logger.info("lore-anchor GPU Worker starting")
+    logger.info("=" * 60)
+    _log_gpu_info()
+    logger.info("Redis URL: %s", REDIS_URL.split("@")[-1])  # hide password
+    logger.info("Mist config: epsilon=%d, steps=%d", MIST_EPSILON, MIST_STEPS)
+    logger.info("=" * 60)
+
+    # --- Graceful shutdown on SIGTERM (SaladCloud sends this on stop) ---
+    def _handle_sigterm(signum: int, frame) -> None:  # type: ignore[no-untyped-def]
+        logger.info("Received SIGTERM — shutting down gracefully")
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+
+    # --- Start arq worker (blocks indefinitely, polling Redis for jobs) ---
+    logger.info("Worker entering arq run loop (waiting for jobs)...")
     run_worker(WorkerSettings)  # type: ignore[arg-type]
