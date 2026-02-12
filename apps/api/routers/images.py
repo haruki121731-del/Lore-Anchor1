@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from pydantic import BaseModel
 
+from apps.api.core.config import get_settings
 from apps.api.core.security import get_current_user_id
 from apps.api.services.database import DatabaseService, get_database_service
 from apps.api.services.queue import QueueService, get_queue_service
@@ -88,17 +89,23 @@ async def upload_image(
     image_id: str | None = None
     try:
         # 2. Upload to R2
+        logger.info("[step 2/4] Uploading to R2: %s", storage_key)
         await storage.upload_file(file_bytes, storage_key, content_type)
+        logger.info("[step 2/4] R2 upload succeeded")
 
         # 3. Persist metadata in Supabase
+        logger.info("[step 3/4] Inserting row into Supabase for user %s", user_id)
         row: dict[str, Any] = db.create_image(
             user_id=user_id,
             original_url=storage_key,
         )
         image_id = row["id"]
+        logger.info("[step 3/4] Supabase insert succeeded, image_id=%s", image_id)
 
         # 4. Enqueue task for the GPU worker
+        logger.info("[step 4/4] Enqueuing task for image_id=%s", image_id)
         await queue.enqueue(image_id=image_id, storage_key=storage_key)
+        logger.info("[step 4/4] Redis enqueue succeeded")
 
     except HTTPException:
         # Re-raise HTTP errors (validation etc.) as-is.
@@ -108,9 +115,15 @@ async def upload_image(
         # If we already created a DB row, mark it as failed.
         if image_id is not None:
             _mark_failed_safe(db, image_id)
+        # In DEBUG mode, expose the real error for easier diagnosis.
+        detail = (
+            f"Upload failed: {type(exc).__name__}: {exc}"
+            if get_settings().DEBUG
+            else "Failed to process upload. Please try again later."
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to process upload. Please try again later.",
+            detail=detail,
         ) from exc
 
     return UploadResponse(image_id=image_id, status="pending")
