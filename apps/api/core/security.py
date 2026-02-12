@@ -21,7 +21,7 @@ _bearer_scheme = HTTPBearer(auto_error=False)
 _ALGORITHM: str = "HS256"
 _AUDIENCE: str = "authenticated"
 
-_DEBUG_USER_ID: str = "00000000-0000-0000-0000-000000000000"
+_DEBUG_USER_ID: str = "21888f74-e977-4293-8968-52c7afaf54c9"
 
 
 def _decode_token(token: str, settings: Settings) -> dict[str, Any]:
