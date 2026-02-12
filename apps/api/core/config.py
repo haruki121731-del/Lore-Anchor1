@@ -19,30 +19,22 @@ class Settings(BaseSettings):
     )
 
     # --- Supabase ---
-    NEXT_PUBLIC_SUPABASE_URL: str
-    NEXT_PUBLIC_SUPABASE_ANON_KEY: str
+    SUPABASE_URL: str
     SUPABASE_SERVICE_ROLE_KEY: str
 
     # --- Cloudflare R2 (S3-compatible) ---
-    R2_ACCOUNT_ID: str
     R2_ACCESS_KEY_ID: str
     R2_SECRET_ACCESS_KEY: str
-    R2_BUCKET_NAME: str
+    R2_ENDPOINT_URL: str
+    R2_RAW_BUCKET: str
+    R2_PROTECTED_BUCKET: str
+    R2_PUBLIC_DOMAIN: str
 
     # --- Redis ---
     REDIS_URL: str
 
     # --- Debug ---
     DEBUG: bool = False
-
-    # --- Worker Config ---
-    MIST_EPSILON: int = 8
-    MIST_STEPS: int = 3
-
-    @property
-    def r2_endpoint_url(self) -> str:
-        """Construct the S3-compatible endpoint URL for Cloudflare R2."""
-        return f"https://{self.R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
 
 
 @lru_cache(maxsize=1)

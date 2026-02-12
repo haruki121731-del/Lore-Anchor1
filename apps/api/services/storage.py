@@ -21,18 +21,16 @@ class StorageService:
     because boto3 is synchronous.
     """
 
-    _BUCKET_RAW: str = "R2_RAW_BUCKET"
-
     def __init__(self) -> None:
         settings = get_settings()
         self._client: S3Client = boto3.client(
             "s3",
-            endpoint_url=settings.r2_endpoint_url,
+            endpoint_url=settings.R2_ENDPOINT_URL,
             aws_access_key_id=settings.R2_ACCESS_KEY_ID,
             aws_secret_access_key=settings.R2_SECRET_ACCESS_KEY,
             region_name="auto",
         )
-        self._bucket: str = settings.R2_BUCKET_NAME
+        self._bucket: str = settings.R2_RAW_BUCKET
 
     # ------------------------------------------------------------------
     # Public helpers

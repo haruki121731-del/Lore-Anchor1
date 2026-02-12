@@ -26,7 +26,7 @@ class DatabaseService:
     def __init__(self) -> None:
         settings = get_settings()
         self._client: Client = create_client(
-            settings.NEXT_PUBLIC_SUPABASE_URL,
+            settings.SUPABASE_URL,
             settings.SUPABASE_SERVICE_ROLE_KEY,
         )
 
