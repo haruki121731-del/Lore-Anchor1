@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     # --- Redis ---
     REDIS_URL: str
 
+    # --- Debug ---
+    DEBUG: bool = False
+
     # --- Worker Config ---
     MIST_EPSILON: int = 8
     MIST_STEPS: int = 3
