@@ -44,6 +44,9 @@ services:
       - CUDA_VISIBLE_DEVICES=
       - MIST_EPSILON=${MIST_EPSILON:-8}
       - MIST_STEPS=${MIST_STEPS:-3}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - R2_PUBLIC_DOMAIN=${R2_PUBLIC_DOMAIN}
     depends_on:
       redis:
         condition: service_healthy
