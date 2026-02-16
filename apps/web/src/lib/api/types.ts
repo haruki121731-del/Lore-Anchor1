@@ -8,6 +8,7 @@ export interface ImageRecord {
   protected_url: string | null;
   created_at: string;
   updated_at: string;
+  c2pa_manifest: Record<string, unknown> | null;
 }
 
 export interface UploadResponse {
