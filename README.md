@@ -215,6 +215,24 @@ GPU処理が動かなければこのプロダクトは成立しないため、�
 
 
 
+### 🚀 Phase 4: Production Deployment
+
+* [x] **Railway (Backend + Redis):**
+  * FastAPI → `https://api-production-550c.up.railway.app`
+  * Redis (internal) → `redis://...@redis.railway.internal:6379`
+  * Redis (public) → `switchyard.proxy.rlwy.net:22395`
+
+* [x] **GHCR (Worker Image):**
+  * `ghcr.io/haruki121731-del/lore-anchor-worker:latest`
+
+* [x] **Vercel (Frontend):**
+  * `https://lore-anchor-web.vercel.app`
+
+* [ ] **SaladCloud (GPU Worker):**
+  * Container Group: `lore-anchor-worker`
+  * Image: `ghcr.io/haruki121731-del/lore-anchor-worker:latest`
+  * GPU: RTX 4000+, 12 GB RAM
+
 ---
 
 ## 6. 環境変数 (Environment Variables)
@@ -243,6 +261,7 @@ MIST_STEPS=3
 # --- API ---
 API_BASE_URL=
 DEBUG=false
+CORS_ORIGINS=  # comma-separated (e.g. https://lore-anchor-web.vercel.app)
 
 ```
 
