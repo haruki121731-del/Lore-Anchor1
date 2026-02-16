@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from supabase import Client, create_client
@@ -13,15 +16,11 @@ _VALID_STATUSES: set[str] = {"pending", "processing", "completed", "failed"}
 
 _TABLE_IMAGES: str = "images"
 
+logger: logging.Logger = logging.getLogger(__name__)
+
 
 class DatabaseService:
-    """Async-friendly wrapper around the Supabase Python SDK.
-
-    Note: The official ``supabase-py`` SDK is synchronous under the hood, so
-    callers in an async context should use ``asyncio.to_thread`` for
-    CPU-bound / long-running queries when needed.  For typical small
-    queries the overhead is negligible and direct calls are acceptable.
-    """
+    """Async-friendly wrapper around the Supabase Python SDK."""
 
     def __init__(self) -> None:
         settings = get_settings()
@@ -40,16 +39,7 @@ class DatabaseService:
         original_url: str,
         watermark_id: str | None = None,
     ) -> dict[str, Any]:
-        """Insert a new row into ``images`` with status ``'pending'``.
-
-        Args:
-            user_id: UUID of the authenticated user (from Supabase Auth).
-            original_url: R2 private URL / object key of the uploaded image.
-            watermark_id: Optional PixelSeal 128-bit ID (set later by worker).
-
-        Returns:
-            The inserted row as a dict.
-        """
+        """Insert a new row into ``images`` with status ``'pending'``."""
         row: dict[str, Any] = {
             "user_id": user_id,
             "original_url": original_url,
@@ -68,11 +58,7 @@ class DatabaseService:
     # ------------------------------------------------------------------
 
     def get_image(self, image_id: str) -> dict[str, Any] | None:
-        """Fetch a single image row by its primary key.
-
-        Returns:
-            The row as a dict, or ``None`` if not found.
-        """
+        """Fetch a single image row by its primary key."""
         response = (
             self._client.table(_TABLE_IMAGES)
             .select("*")
@@ -99,19 +85,7 @@ class DatabaseService:
     # ------------------------------------------------------------------
 
     def update_status(self, image_id: str, status: str) -> dict[str, Any]:
-        """Set the ``status`` column of an image row.
-
-        Args:
-            image_id: UUID of the target row.
-            status: One of ``pending``, ``processing``, ``completed``,
-                    ``failed``.
-
-        Raises:
-            ValueError: If *status* is not a valid value.
-
-        Returns:
-            The updated row as a dict.
-        """
+        """Set the ``status`` column of an image row."""
         if status not in _VALID_STATUSES:
             raise ValueError(
                 f"Invalid status '{status}'. Must be one of {_VALID_STATUSES}"
@@ -129,10 +103,7 @@ class DatabaseService:
         image_id: str,
         protected_url: str,
     ) -> dict[str, Any]:
-        """Populate ``protected_url`` and mark the image as ``completed``.
-
-        Called by the webhook handler once the GPU worker finishes.
-        """
+        """Populate ``protected_url`` and mark the image as ``completed``."""
         response = (
             self._client.table(_TABLE_IMAGES)
             .update({"protected_url": protected_url, "status": "completed"})
@@ -141,17 +112,87 @@ class DatabaseService:
         )
         return dict(response.data[0])
 
-    def set_failed(
-        self,
-        image_id: str,
-    ) -> dict[str, Any]:
-        """Mark the image as ``failed``.
-
-        Called when the GPU worker reports an unrecoverable error.
-        """
+    def set_failed(self, image_id: str) -> dict[str, Any]:
+        """Mark the image as ``failed``."""
         return self.update_status(image_id, "failed")
 
 
+class DebugDatabaseService(DatabaseService):
+    """In-memory stub used when ``DEBUG=true``.
+
+    Stores image records in a plain dict instead of Supabase.
+    """
+
+    def __init__(self) -> None:
+        self._store: dict[str, dict[str, Any]] = {}
+        logger.info("[DEBUG] DatabaseService using in-memory store")
+
+    def create_image(
+        self,
+        user_id: str,
+        original_url: str,
+        watermark_id: str | None = None,
+    ) -> dict[str, Any]:
+        image_id: str = str(uuid.uuid4())
+        now: str = datetime.now(timezone.utc).isoformat()
+        row: dict[str, Any] = {
+            "id": image_id,
+            "user_id": user_id,
+            "original_url": original_url,
+            "protected_url": None,
+            "watermark_id": watermark_id,
+            "status": "pending",
+            "created_at": now,
+            "updated_at": now,
+        }
+        self._store[image_id] = row
+        logger.info("[DEBUG] DB insert: image_id=%s", image_id)
+        return dict(row)
+
+    def get_image(self, image_id: str) -> dict[str, Any] | None:
+        row = self._store.get(image_id)
+        return dict(row) if row else None
+
+    def list_images_by_user(self, user_id: str) -> list[dict[str, Any]]:
+        return [
+            dict(r) for r in self._store.values()
+            if r["user_id"] == user_id
+        ]
+
+    def update_status(self, image_id: str, status: str) -> dict[str, Any]:
+        if status not in _VALID_STATUSES:
+            raise ValueError(
+                f"Invalid status '{status}'. Must be one of {_VALID_STATUSES}"
+            )
+        row = self._store.get(image_id)
+        if row is None:
+            raise KeyError(f"Image {image_id} not found in debug store")
+        row["status"] = status
+        row["updated_at"] = datetime.now(timezone.utc).isoformat()
+        logger.info("[DEBUG] DB update: image_id=%s -> status=%s", image_id, status)
+        return dict(row)
+
+    def set_protected_url(
+        self,
+        image_id: str,
+        protected_url: str,
+    ) -> dict[str, Any]:
+        row = self._store.get(image_id)
+        if row is None:
+            raise KeyError(f"Image {image_id} not found in debug store")
+        row["protected_url"] = protected_url
+        row["status"] = "completed"
+        row["updated_at"] = datetime.now(timezone.utc).isoformat()
+        logger.info("[DEBUG] DB update: image_id=%s -> completed", image_id)
+        return dict(row)
+
+
 def get_database_service() -> DatabaseService:
-    """Return a new :class:`DatabaseService` instance."""
+    """Return a :class:`DatabaseService` instance.
+
+    In DEBUG mode, returns a :class:`DebugDatabaseService` backed by an
+    in-memory dict instead of Supabase.
+    """
+    if get_settings().DEBUG:
+        return DebugDatabaseService()
     return DatabaseService()

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from functools import lru_cache
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import boto3
@@ -12,6 +14,8 @@ from apps.api.core.config import get_settings
 
 if TYPE_CHECKING:
     from mypy_boto3_s3 import S3Client
+
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class StorageService:
@@ -61,15 +65,7 @@ class StorageService:
         key: str,
         expires_in: int = 3600,
     ) -> str:
-        """Generate a pre-signed GET URL for the given object *key*.
-
-        Args:
-            key: S3 object key.
-            expires_in: URL lifetime in seconds (default 1 hour).
-
-        Returns:
-            A pre-signed URL string.
-        """
+        """Generate a pre-signed GET URL for the given object *key*."""
         url: str = await asyncio.to_thread(
             self._client.generate_presigned_url,
             "get_object",
@@ -87,7 +83,53 @@ class StorageService:
         )
 
 
+class DebugStorageService(StorageService):
+    """Local filesystem stub used when ``DEBUG=true``.
+
+    Files are written to ``tmp/uploads/`` instead of Cloudflare R2.
+    """
+
+    def __init__(self) -> None:
+        self._base_dir: Path = Path("tmp/uploads")
+        self._base_dir.mkdir(parents=True, exist_ok=True)
+        logger.info("[DEBUG] StorageService using local dir: %s", self._base_dir.resolve())
+
+    async def upload_file(
+        self,
+        file_bytes: bytes,
+        key: str,
+        content_type: str = "image/png",
+    ) -> str:
+        dest: Path = self._base_dir / key
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(file_bytes)
+        logger.info("[DEBUG] Saved %d bytes -> %s", len(file_bytes), dest)
+        return key
+
+    async def generate_presigned_url(
+        self,
+        key: str,
+        expires_in: int = 3600,
+    ) -> str:
+        path: Path = self._base_dir / key
+        url = f"file://{path.resolve()}"
+        logger.info("[DEBUG] Presigned URL (local): %s", url)
+        return url
+
+    async def delete_file(self, key: str) -> None:
+        path: Path = self._base_dir / key
+        if path.exists():
+            path.unlink()
+            logger.info("[DEBUG] Deleted local file: %s", path)
+
+
 @lru_cache(maxsize=1)
 def get_storage_service() -> StorageService:
-    """Return a cached singleton of :class:`StorageService`."""
+    """Return a cached singleton of :class:`StorageService`.
+
+    In DEBUG mode, returns a :class:`DebugStorageService` that writes to
+    the local filesystem instead of Cloudflare R2.
+    """
+    if get_settings().DEBUG:
+        return DebugStorageService()
     return StorageService()

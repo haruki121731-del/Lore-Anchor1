@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from apps.api.core.config import get_settings
 from apps.api.routers import images
+
+logger: logging.Logger = logging.getLogger(__name__)
 
 # ------------------------------------------------------------------
 # Lifespan (startup / shutdown)
@@ -16,11 +20,13 @@ from apps.api.routers import images
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Application lifespan handler.
-
-    Currently a no-op placeholder; use this to initialise / tear-down
-    shared resources (e.g. Redis connection pool) in the future.
-    """
+    """Application lifespan handler."""
+    settings = get_settings()
+    if settings.DEBUG:
+        logger.warning(
+            "=== DEBUG MODE ACTIVE === "
+            "Storage -> local tmp/uploads/, DB -> in-memory, Queue -> log-only"
+        )
     yield
 
 
