@@ -158,31 +158,31 @@ AIエージェントは以下の順序で実装を進めること。各フェー
 
 GPU処理が動かなければこのプロダクトは成立しないため、ここから着手する。
 
-* [ ] **GPU Worker実装:**
+* [x] **GPU Worker実装:**
 * `workers/gpu-worker/` を作成。
 * Mist v2 と PixelSeal のコードを含める（GitHub等のOSSからクローンまたは移植）。
 * `main.py` で画像を受け取り、Step1〜3を実行するスクリプトを作成。
 
 
-* [ ] **Docker化:**
+* [x] **Docker化:**
 * `nvidia/cuda` ベースのDockerfileを作成。
 * PyTorch等の依存関係を解決し、ビルドが通ることを確認。
 
 
-* [ ] **Local Testing:**
+* [x] **Local Testing:**
 * ローカルGPU（またはColab環境）でコンテナを起動し、画像1枚を処理して出力結果を確認。
 
 
 
 ### ✅ Phase 2: Backend API & Queue
 
-* [ ] **FastAPI Setup:**
+* [x] **FastAPI Setup:**
 * `apps/api` をセットアップ。
 * `/upload` エンドポイント実装（Supabase Auth検証込み）。
 * R2へのPre-signed URL発行、またはサーバー経由アップロード実装。
 
 
-* [ ] **Queue Connection:**
+* [x] **Queue Connection:**
 * APIからRedisへタスクをPushする処理。
 * GPU WorkerからRedisをPoll（またはSubscribe）する処理の統合。
 
@@ -190,18 +190,18 @@ GPU処理が動かなければこのプロダクトは成立しないため、�
 
 ### ✅ Phase 3: Frontend (UX)
 
-* [ ] **Next.js Setup:**
+* [x] **Next.js Setup:**
 * `apps/web` をセットアップ。
 * Supabase Auth UIの実装。
 
 
-* [ ] **Upload UI:**
+* [x] **Upload UI:**
 * Drag & Drop ゾーンの実装。
 * アップロード進捗バー。
 * SSE (Server-Sent Events) または ポーリングによる処理状況のリアルタイム表示。
 
 
-* [ ] **Dashboard:**
+* [x] **Dashboard:**
 * `protected_url` が生成されたら画像を表示し、ダウンロード可能にする。
 
 
@@ -213,23 +213,27 @@ GPU処理が動かなければこのプロダクトは成立しないため、�
 `.env` ファイルに必要な変数は以下の通り。
 
 ```ini
-# Supabase
-NEXT_PUBLIC_SUPABASE_URL=
-NEXT_PUBLIC_SUPABASE_ANON_KEY=
+# --- Supabase ---
+SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
 
-# Cloudflare R2
-R2_ACCOUNT_ID=
+# --- Cloudflare R2 ---
 R2_ACCESS_KEY_ID=
 R2_SECRET_ACCESS_KEY=
+R2_ENDPOINT_URL=
 R2_BUCKET_NAME=
+R2_PUBLIC_DOMAIN=
 
-# Redis
+# --- Redis ---
 REDIS_URL=
 
-# Worker Config
+# --- Worker Config ---
 MIST_EPSILON=8
 MIST_STEPS=3
+
+# --- API ---
+API_BASE_URL=
+DEBUG=false
 
 ```
 
