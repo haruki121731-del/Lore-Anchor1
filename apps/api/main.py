@@ -45,12 +45,16 @@ app = FastAPI(
 # CORS — allow the Next.js frontend in dev & production
 # ------------------------------------------------------------------
 
+_default_origins = [
+    "http://localhost:3000",     # Next.js dev server
+    "https://lore-anchor.com",  # production (placeholder)
+]
+_extra = get_settings().CORS_ORIGINS
+_origins = _default_origins + [o.strip() for o in _extra.split(",") if o.strip()] if _extra else _default_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",     # Next.js dev server
-        "https://lore-anchor.com",   # production (placeholder)
-    ],
+    allow_origins=_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

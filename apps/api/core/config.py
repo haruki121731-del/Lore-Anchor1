@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     # --- Redis (optional in DEBUG mode) ---
     REDIS_URL: str = ""
 
+    # --- CORS ---
+    CORS_ORIGINS: str = ""
+
     # --- Debug ---
     DEBUG: bool = False
 
