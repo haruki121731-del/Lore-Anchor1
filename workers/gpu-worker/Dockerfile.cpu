@@ -1,0 +1,25 @@
+# =============================================================================
+# lore-anchor GPU Worker — CPU-only variant for local development
+# Uses standard PyTorch (no CUDA) for faster builds on machines without GPU.
+# =============================================================================
+FROM python:3.10-slim
+
+ENV PYTHONUNBUFFERED=1
+ENV CUDA_VISIBLE_DEVICES=""
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install CPU-only PyTorch first, then the rest of the requirements
+COPY requirements.txt .
+RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir -r requirements.txt 2>/dev/null || \
+    pip install --no-cache-dir $(grep -v '^torch\|^torchvision\|^--extra-index' requirements.txt)
+
+COPY . .
+
+CMD ["python3", "main.py"]
