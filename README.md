@@ -67,26 +67,35 @@ Monorepo構成を採用する。
 
 ```text
 lore-anchor/
-├── .github/              # CI/CD workflows
+├── .github/
+│   └── workflows/        # CI (api, web, docker-build)
 ├── apps/
 │   ├── web/              # Frontend (Next.js)
-│   │   ├── app/
-│   │   ├── components/
-│   │   └── lib/          # Supabase Client, API wrappers
+│   │   └── src/
+│   │       ├── app/      # App Router pages
+│   │       ├── components/
+│   │       └── lib/      # Supabase Client, API wrappers
 │   └── api/              # Backend (FastAPI)
 │       ├── main.py
 │       ├── routers/
-│       ├── models/       # Pydantic Schemas
-│       └── services/     # Redis/DB Logic
+│       ├── models/
+│       ├── services/     # Redis/DB/Storage Logic
+│       └── tests/
 ├── workers/
 │   └── gpu-worker/       # Python GPU Worker
-│       ├── Dockerfile    # The most critical file
-│       ├── main.py       # Worker entrypoint (Celery/Arq)
+│       ├── Dockerfile
+│       ├── main.py       # Worker entrypoint (BLPOP consumer)
 │       ├── core/
 │       │   ├── mist/     # Mist v2 logic
 │       │   └── seal/     # PixelSeal logic
 │       └── requirements.txt
-├── packages/             # Shared logic (types, configs)
+├── packages/
+│   └── shared-types/     # Shared TypeScript type definitions
+├── supabase/
+│   └── migrations/       # DB migration SQL files
+├── .dockerignore
+├── .editorconfig
+├── .prettierrc
 ├── docker-compose.yml    # For local development
 └── README.md             # This file
 
