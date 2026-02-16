@@ -1,46 +1,20 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import type { ImageRecord, ImageStatus } from "@/lib/api/types";
+import { listImages } from "@/lib/api/images";
+import { getSupabaseClient } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
-// Mock data for development — replace with real API calls once backend is ready
-const MOCK_IMAGES: ImageRecord[] = [
-  {
-    image_id: "img_001",
-    user_id: "user_1",
-    original_filename: "photo_landscape.png",
-    status: "completed",
-    protected_url: "https://placehold.co/400x300/png?text=Protected+Image",
-    created_at: "2026-02-15T10:00:00Z",
-    updated_at: "2026-02-15T10:05:00Z",
-  },
-  {
-    image_id: "img_002",
-    user_id: "user_1",
-    original_filename: "artwork_v2.jpg",
-    status: "processing",
-    protected_url: null,
-    created_at: "2026-02-16T08:30:00Z",
-    updated_at: "2026-02-16T08:30:00Z",
-  },
-  {
-    image_id: "img_003",
-    user_id: "user_1",
-    original_filename: "portrait_final.webp",
-    status: "pending",
-    protected_url: null,
-    created_at: "2026-02-16T09:00:00Z",
-    updated_at: "2026-02-16T09:00:00Z",
-  },
-];
-
 function StatusBadge({ status }: { status: ImageStatus }) {
   const colors: Record<ImageStatus, string> = {
-    pending: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
-    processing: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
-    completed: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
+    pending:
+      "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
+    processing:
+      "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
+    completed:
+      "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
     failed: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
   };
 
@@ -53,33 +27,54 @@ function StatusBadge({ status }: { status: ImageStatus }) {
   );
 }
 
+function extractFilename(url: string): string {
+  const parts = url.split("/");
+  return parts[parts.length - 1] || url;
+}
+
 interface ImageListProps {
   refreshKey: number;
 }
 
 export function ImageList({ refreshKey }: ImageListProps) {
-  const [images, setImages] = useState<ImageRecord[]>(MOCK_IMAGES);
+  const [images, setImages] = useState<ImageRecord[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const mountedRef = useRef(true);
 
-  const fetchImages = useCallback(() => {
-    // TODO: Replace with real API call
-    // For now, cycle mock statuses to simulate polling updates
-    setImages((prev) =>
-      prev.map((img) => {
-        if (img.status === "pending") {
-          return { ...img, status: "processing" as const, updated_at: new Date().toISOString() };
-        }
-        if (img.status === "processing" && Math.random() > 0.7) {
-          return {
-            ...img,
-            status: "completed" as const,
-            protected_url: "https://placehold.co/400x300/png?text=Protected+Image",
-            updated_at: new Date().toISOString(),
-          };
-        }
-        return img;
-      })
-    );
+  const fetchImages = useCallback(async () => {
+    try {
+      const supabase = getSupabaseClient();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session) {
+        if (mountedRef.current) setError("Not authenticated");
+        return;
+      }
+
+      const data = await listImages(session.access_token);
+      if (mountedRef.current) {
+        setImages(data);
+        setError(null);
+      }
+    } catch (err) {
+      if (mountedRef.current) {
+        setError(
+          err instanceof Error ? err.message : "Failed to load images"
+        );
+      }
+    } finally {
+      if (mountedRef.current) setLoading(false);
+    }
   }, []);
+
+  // Initial fetch + refetch on refreshKey change
+  useEffect(() => {
+    setLoading(true);
+    fetchImages();
+  }, [fetchImages, refreshKey]);
 
   // Poll every 5 seconds
   useEffect(() => {
@@ -87,12 +82,39 @@ export function ImageList({ refreshKey }: ImageListProps) {
     return () => clearInterval(interval);
   }, [fetchImages]);
 
-  // Reset mock data when a new upload completes
+  // Cleanup ref on unmount
   useEffect(() => {
-    if (refreshKey > 0) {
-      setImages(MOCK_IMAGES);
-    }
-  }, [refreshKey]);
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  if (loading && images.length === 0) {
+    return (
+      <p className="py-8 text-center text-sm text-zinc-500">Loading...</p>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="py-8 text-center">
+        <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+        <Button
+          variant="outline"
+          size="sm"
+          className="mt-2"
+          onClick={() => {
+            setError(null);
+            setLoading(true);
+            fetchImages();
+          }}
+        >
+          Retry
+        </Button>
+      </div>
+    );
+  }
 
   if (images.length === 0) {
     return (
@@ -111,7 +133,7 @@ export function ImageList({ refreshKey }: ImageListProps) {
               /* eslint-disable-next-line @next/next/no-img-element */
               <img
                 src={img.protected_url}
-                alt={img.original_filename}
+                alt={extractFilename(img.original_url)}
                 className="h-16 w-16 rounded object-cover"
               />
             ) : (
@@ -134,7 +156,7 @@ export function ImageList({ refreshKey }: ImageListProps) {
 
             <div className="flex-1 min-w-0">
               <p className="truncate text-sm font-medium">
-                {img.original_filename}
+                {extractFilename(img.original_url)}
               </p>
               <p className="text-xs text-zinc-500">
                 {new Date(img.created_at).toLocaleString()}
@@ -145,7 +167,10 @@ export function ImageList({ refreshKey }: ImageListProps) {
 
             {img.status === "completed" && img.protected_url && (
               <Button variant="outline" size="sm" asChild>
-                <a href={img.protected_url} download={img.original_filename}>
+                <a
+                  href={img.protected_url}
+                  download={extractFilename(img.original_url)}
+                >
                   Download
                 </a>
               </Button>

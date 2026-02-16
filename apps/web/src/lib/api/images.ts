@@ -44,3 +44,14 @@ export async function getImage(
   if (!res.ok) throw new Error(`Failed to fetch image: ${res.status}`);
   return res.json() as Promise<ImageRecord>;
 }
+
+export async function listImages(
+  token: string
+): Promise<ImageRecord[]> {
+  const res = await fetch(`${API_BASE}/api/v1/images/`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`Failed to fetch images: ${res.status}`);
+  const data = (await res.json()) as { images: ImageRecord[] };
+  return data.images;
+}

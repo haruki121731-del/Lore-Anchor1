@@ -34,7 +34,7 @@ class StorageService:
             aws_secret_access_key=settings.R2_SECRET_ACCESS_KEY,
             region_name="auto",
         )
-        self._bucket: str = settings.R2_RAW_BUCKET
+        self._bucket: str = settings.R2_BUCKET_NAME
 
     # ------------------------------------------------------------------
     # Public helpers
