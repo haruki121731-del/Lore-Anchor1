@@ -1,0 +1,28 @@
+name: Docker Build - GPU Worker
+
+on:
+  push:
+    paths:
+      - "workers/gpu-worker/**"
+  pull_request:
+    paths:
+      - "workers/gpu-worker/**"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build GPU Worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: workers/gpu-worker
+          file: workers/gpu-worker/Dockerfile
+          target: runtime
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
