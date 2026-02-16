@@ -34,9 +34,69 @@ _MAX_FILE_SIZE: int = 20 * 1024 * 1024  # 20 MB
 # ------------------------------------------------------------------
 # Response schema
 # ------------------------------------------------------------------
+class ImageRecord(BaseModel):
+    id: str
+    user_id: str
+    original_url: str
+    protected_url: str | None = None
+    watermark_id: str | None = None
+    status: str
+    created_at: str
+    updated_at: str
+
+
+class ImageListResponse(BaseModel):
+    images: list[ImageRecord]
+
+
 class UploadResponse(BaseModel):
     image_id: str
     status: str
+
+
+# ------------------------------------------------------------------
+# GET /images/
+# ------------------------------------------------------------------
+@router.get(
+    "/",
+    response_model=ImageListResponse,
+    summary="List images for the authenticated user",
+)
+async def list_images(
+    user_id: str = Depends(get_current_user_id),
+    db: DatabaseService = Depends(get_database_service),
+) -> ImageListResponse:
+    """Return all images belonging to the authenticated user, newest first."""
+    rows = db.list_images_by_user(user_id)
+    return ImageListResponse(images=rows)
+
+
+# ------------------------------------------------------------------
+# GET /images/{image_id}
+# ------------------------------------------------------------------
+@router.get(
+    "/{image_id}",
+    response_model=ImageRecord,
+    summary="Get a single image by ID",
+)
+async def get_image(
+    image_id: str,
+    user_id: str = Depends(get_current_user_id),
+    db: DatabaseService = Depends(get_database_service),
+) -> ImageRecord:
+    """Return a single image record. Returns 403 if it belongs to another user."""
+    row = db.get_image(image_id)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Image not found",
+        )
+    if row["user_id"] != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
+    return ImageRecord(**row)
 
 
 # ------------------------------------------------------------------
