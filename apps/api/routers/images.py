@@ -7,10 +7,15 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
-from pydantic import BaseModel
 
 from apps.api.core.config import get_settings
 from apps.api.core.security import get_current_user_id
+from apps.api.models.schemas import (
+    ImageListResponse,
+    ImageRecord,
+    TaskStatusResponse,
+    UploadResponse,
+)
 from apps.api.services.database import DatabaseService, get_database_service
 from apps.api.services.queue import QueueService, get_queue_service
 from apps.api.services.storage import StorageService, get_storage_service
@@ -29,29 +34,6 @@ _ALLOWED_CONTENT_TYPES: set[str] = {
 }
 
 _MAX_FILE_SIZE: int = 20 * 1024 * 1024  # 20 MB
-
-
-# ------------------------------------------------------------------
-# Response schema
-# ------------------------------------------------------------------
-class ImageRecord(BaseModel):
-    id: str
-    user_id: str
-    original_url: str
-    protected_url: str | None = None
-    watermark_id: str | None = None
-    status: str
-    created_at: str
-    updated_at: str
-
-
-class ImageListResponse(BaseModel):
-    images: list[ImageRecord]
-
-
-class UploadResponse(BaseModel):
-    image_id: str
-    status: str
 
 
 # ------------------------------------------------------------------
@@ -187,6 +169,54 @@ async def upload_image(
         ) from exc
 
     return UploadResponse(image_id=image_id, status="pending")
+
+
+# ------------------------------------------------------------------
+# GET /tasks/{image_id}/status
+# ------------------------------------------------------------------
+
+# Separate router so the URL is /api/v1/tasks/{image_id}/status
+tasks_router = APIRouter(prefix="/tasks", tags=["tasks"])
+
+
+@tasks_router.get(
+    "/{image_id}/status",
+    response_model=TaskStatusResponse,
+    summary="Get task status for an image",
+)
+async def get_task_status(
+    image_id: str,
+    user_id: str = Depends(get_current_user_id),
+    db: DatabaseService = Depends(get_database_service),
+) -> TaskStatusResponse:
+    """Return current processing status for the given image.
+
+    The frontend polls this endpoint until ``status`` is
+    ``completed`` or ``failed``.
+    """
+    # Verify the image exists and belongs to the requesting user.
+    image = db.get_image(image_id)
+    if image is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Image not found",
+        )
+    if image["user_id"] != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
+
+    # Fetch the latest task row for this image.
+    task = db.get_task_by_image_id(image_id)
+
+    return TaskStatusResponse(
+        image_id=image_id,
+        status=image["status"],
+        error_log=task.get("error_log") if task else None,
+        started_at=task.get("started_at") if task else None,
+        completed_at=task.get("completed_at") if task else None,
+    )
 
 
 # ------------------------------------------------------------------

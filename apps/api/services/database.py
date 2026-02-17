@@ -15,6 +15,7 @@ from apps.api.core.config import get_settings
 _VALID_STATUSES: set[str] = {"pending", "processing", "completed", "failed"}
 
 _TABLE_IMAGES: str = "images"
+_TABLE_TASKS: str = "tasks"
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -116,6 +117,24 @@ class DatabaseService:
         """Mark the image as ``failed``."""
         return self.update_status(image_id, "failed")
 
+    # ------------------------------------------------------------------
+    # tasks table – READ
+    # ------------------------------------------------------------------
+
+    def get_task_by_image_id(self, image_id: str) -> dict[str, Any] | None:
+        """Return the most recent task row for *image_id*, or ``None``."""
+        response = (
+            self._client.table(_TABLE_TASKS)
+            .select("*")
+            .eq("image_id", image_id)
+            .order("started_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if response.data:
+            return dict(response.data[0])
+        return None
+
 
 class DebugDatabaseService(DatabaseService):
     """In-memory stub used when ``DEBUG=true``.
@@ -185,6 +204,11 @@ class DebugDatabaseService(DatabaseService):
         row["updated_at"] = datetime.now(timezone.utc).isoformat()
         logger.info("[DEBUG] DB update: image_id=%s -> completed", image_id)
         return dict(row)
+
+
+    def get_task_by_image_id(self, image_id: str) -> dict[str, Any] | None:
+        """Debug stub — always returns ``None`` (no tasks table)."""
+        return None
 
 
 def get_database_service() -> DatabaseService:
