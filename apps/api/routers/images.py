@@ -7,7 +7,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from apps.api.core.config import get_settings
 from apps.api.core.security import get_current_user_id
@@ -35,11 +35,14 @@ _MAX_FILE_SIZE: int = 20 * 1024 * 1024  # 20 MB
 # Response schema
 # ------------------------------------------------------------------
 class ImageRecord(BaseModel):
-    id: str
+    model_config = {"populate_by_name": True}
+
+    image_id: str = Field(alias="id")
     user_id: str
     original_url: str
     protected_url: str | None = None
     watermark_id: str | None = None
+    c2pa_manifest: dict[str, Any] | None = None
     status: str
     created_at: str
     updated_at: str

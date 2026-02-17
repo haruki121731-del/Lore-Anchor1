@@ -102,11 +102,21 @@ class DatabaseService:
         self,
         image_id: str,
         protected_url: str,
+        watermark_id: str | None = None,
+        c2pa_manifest: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Populate ``protected_url`` and mark the image as ``completed``."""
+        update_data: dict[str, Any] = {
+            "protected_url": protected_url,
+            "status": "completed",
+        }
+        if watermark_id is not None:
+            update_data["watermark_id"] = watermark_id
+        if c2pa_manifest is not None:
+            update_data["c2pa_manifest"] = c2pa_manifest
         response = (
             self._client.table(_TABLE_IMAGES)
-            .update({"protected_url": protected_url, "status": "completed"})
+            .update(update_data)
             .eq("id", image_id)
             .execute()
         )
@@ -141,6 +151,7 @@ class DebugDatabaseService(DatabaseService):
             "original_url": original_url,
             "protected_url": None,
             "watermark_id": watermark_id,
+            "c2pa_manifest": None,
             "status": "pending",
             "created_at": now,
             "updated_at": now,
@@ -176,6 +187,8 @@ class DebugDatabaseService(DatabaseService):
         self,
         image_id: str,
         protected_url: str,
+        watermark_id: str | None = None,
+        c2pa_manifest: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         row = self._store.get(image_id)
         if row is None:
@@ -183,6 +196,10 @@ class DebugDatabaseService(DatabaseService):
         row["protected_url"] = protected_url
         row["status"] = "completed"
         row["updated_at"] = datetime.now(timezone.utc).isoformat()
+        if watermark_id is not None:
+            row["watermark_id"] = watermark_id
+        if c2pa_manifest is not None:
+            row["c2pa_manifest"] = c2pa_manifest
         logger.info("[DEBUG] DB update: image_id=%s -> completed", image_id)
         return dict(row)
 
