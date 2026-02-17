@@ -1,0 +1,77 @@
+"""lore-anchor Backend API — FastAPI application entry-point."""
+
+from __future__ import annotations
+
+import logging
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from apps.api.core.config import get_settings
+from apps.api.routers import images
+
+logger: logging.Logger = logging.getLogger(__name__)
+
+# ------------------------------------------------------------------
+# Lifespan (startup / shutdown)
+# ------------------------------------------------------------------
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Application lifespan handler."""
+    settings = get_settings()
+    if settings.DEBUG:
+        logger.warning(
+            "=== DEBUG MODE ACTIVE === "
+            "Storage -> local tmp/uploads/, DB -> in-memory, Queue -> log-only"
+        )
+    yield
+
+
+# ------------------------------------------------------------------
+# FastAPI application
+# ------------------------------------------------------------------
+
+app = FastAPI(
+    title="lore-anchor API",
+    description="Copyright-protection pipeline for creators — Shield, Trust, Speed.",
+    version="0.1.0",
+    lifespan=_lifespan,
+)
+
+# ------------------------------------------------------------------
+# CORS — allow the Next.js frontend in dev & production
+# ------------------------------------------------------------------
+
+_default_origins = [
+    "http://localhost:3000",     # Next.js dev server
+    "https://lore-anchor.com",  # production (placeholder)
+]
+_extra = get_settings().CORS_ORIGINS
+_origins = _default_origins + [o.strip() for o in _extra.split(",") if o.strip()] if _extra else _default_origins
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ------------------------------------------------------------------
+# Routers
+# ------------------------------------------------------------------
+
+app.include_router(images.router, prefix="/api/v1")
+
+
+# ------------------------------------------------------------------
+# Health check
+# ------------------------------------------------------------------
+
+@app.get("/health", tags=["health"])
+async def health() -> dict[str, str]:
+    """Minimal liveness probe."""
+    return {"status": "ok"}

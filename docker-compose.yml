@@ -1,0 +1,52 @@
+services:
+  # ---------------------------------------------------------------------------
+  # Redis — task queue between API and GPU Worker
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # API — FastAPI backend (apps/api)
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DEBUG=${DEBUG:-false}
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # Worker — GPU Worker (workers/gpu-worker), CPU fallback mode
+  # ---------------------------------------------------------------------------
+  worker:
+    build:
+      context: workers/gpu-worker
+      dockerfile: Dockerfile.cpu
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - CUDA_VISIBLE_DEVICES=
+      - MIST_EPSILON=${MIST_EPSILON:-8}
+      - MIST_STEPS=${MIST_STEPS:-3}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - R2_PUBLIC_DOMAIN=${R2_PUBLIC_DOMAIN}
+    depends_on:
+      redis:
+        condition: service_healthy
