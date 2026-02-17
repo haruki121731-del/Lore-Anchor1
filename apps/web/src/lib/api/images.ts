@@ -22,7 +22,14 @@ export async function uploadImage(
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve(JSON.parse(xhr.responseText) as UploadResponse);
       } else {
-        reject(new Error(`Upload failed: ${xhr.status} ${xhr.statusText}`));
+        let detail = xhr.statusText;
+        try {
+          const body = JSON.parse(xhr.responseText);
+          if (body.detail) detail = body.detail;
+        } catch {
+          // use statusText
+        }
+        reject(new Error(`Upload failed (${xhr.status}): ${detail}`));
       }
     });
 
@@ -41,7 +48,16 @@ export async function getImage(
   const res = await fetch(`${API_BASE}/api/v1/images/${imageId}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (!res.ok) throw new Error(`Failed to fetch image: ${res.status}`);
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const body = await res.json();
+      if (body.detail) detail = body.detail;
+    } catch {
+      // use statusText
+    }
+    throw new Error(`Failed to fetch image (${res.status}): ${detail}`);
+  }
   return res.json() as Promise<ImageRecord>;
 }
 
@@ -51,7 +67,16 @@ export async function listImages(
   const res = await fetch(`${API_BASE}/api/v1/images/`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (!res.ok) throw new Error(`Failed to fetch images: ${res.status}`);
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const body = await res.json();
+      if (body.detail) detail = body.detail;
+    } catch {
+      // use statusText
+    }
+    throw new Error(`Failed to fetch images (${res.status}): ${detail}`);
+  }
   const data = (await res.json()) as { images: ImageRecord[] };
   return data.images;
 }

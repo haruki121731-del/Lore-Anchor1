@@ -15,6 +15,7 @@ from apps.api.core.config import get_settings
 _VALID_STATUSES: set[str] = {"pending", "processing", "completed", "failed"}
 
 _TABLE_IMAGES: str = "images"
+_TABLE_TASKS: str = "tasks"
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -51,7 +52,7 @@ class DatabaseService:
         response = (
             self._client.table(_TABLE_IMAGES).insert(row).execute()
         )
-        return dict(response.data[0])
+        return dict(response.data[0])  # type: ignore[arg-type]
 
     # ------------------------------------------------------------------
     # images table – READ
@@ -66,7 +67,7 @@ class DatabaseService:
             .execute()
         )
         if response.data:
-            return dict(response.data[0])
+            return dict(response.data[0])  # type: ignore[arg-type]
         return None
 
     def list_images_by_user(self, user_id: str) -> list[dict[str, Any]]:
@@ -78,7 +79,7 @@ class DatabaseService:
             .order("created_at", desc=True)
             .execute()
         )
-        return [dict(row) for row in response.data]
+        return [dict(row) for row in response.data]  # type: ignore[arg-type]
 
     # ------------------------------------------------------------------
     # images table – UPDATE
@@ -96,25 +97,53 @@ class DatabaseService:
             .eq("id", image_id)
             .execute()
         )
-        return dict(response.data[0])
+        return dict(response.data[0])  # type: ignore[arg-type]
 
     def set_protected_url(
         self,
         image_id: str,
         protected_url: str,
+        watermark_id: str | None = None,
+        c2pa_manifest: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Populate ``protected_url`` and mark the image as ``completed``."""
+        update_data: dict[str, Any] = {
+            "protected_url": protected_url,
+            "status": "completed",
+        }
+        if watermark_id is not None:
+            update_data["watermark_id"] = watermark_id
+        if c2pa_manifest is not None:
+            update_data["c2pa_manifest"] = c2pa_manifest
         response = (
             self._client.table(_TABLE_IMAGES)
-            .update({"protected_url": protected_url, "status": "completed"})
+            .update(update_data)
             .eq("id", image_id)
             .execute()
         )
-        return dict(response.data[0])
+        return dict(response.data[0])  # type: ignore[arg-type]
 
     def set_failed(self, image_id: str) -> dict[str, Any]:
         """Mark the image as ``failed``."""
         return self.update_status(image_id, "failed")
+
+    # ------------------------------------------------------------------
+    # tasks table – READ
+    # ------------------------------------------------------------------
+
+    def get_task_by_image_id(self, image_id: str) -> dict[str, Any] | None:
+        """Return the most recent task row for *image_id*, or ``None``."""
+        response = (
+            self._client.table(_TABLE_TASKS)
+            .select("*")
+            .eq("image_id", image_id)
+            .order("started_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if response.data:
+            return dict(response.data[0])  # type: ignore[arg-type]
+        return None
 
 
 class DebugDatabaseService(DatabaseService):
@@ -141,6 +170,7 @@ class DebugDatabaseService(DatabaseService):
             "original_url": original_url,
             "protected_url": None,
             "watermark_id": watermark_id,
+            "c2pa_manifest": None,
             "status": "pending",
             "created_at": now,
             "updated_at": now,
@@ -176,6 +206,8 @@ class DebugDatabaseService(DatabaseService):
         self,
         image_id: str,
         protected_url: str,
+        watermark_id: str | None = None,
+        c2pa_manifest: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         row = self._store.get(image_id)
         if row is None:
@@ -183,8 +215,17 @@ class DebugDatabaseService(DatabaseService):
         row["protected_url"] = protected_url
         row["status"] = "completed"
         row["updated_at"] = datetime.now(timezone.utc).isoformat()
+        if watermark_id is not None:
+            row["watermark_id"] = watermark_id
+        if c2pa_manifest is not None:
+            row["c2pa_manifest"] = c2pa_manifest
         logger.info("[DEBUG] DB update: image_id=%s -> completed", image_id)
         return dict(row)
+
+
+    def get_task_by_image_id(self, image_id: str) -> dict[str, Any] | None:
+        """Debug stub — always returns ``None`` (no tasks table)."""
+        return None
 
 
 def get_database_service() -> DatabaseService:

@@ -34,12 +34,12 @@ class QueueService:
             "image_id": image_id,
             "storage_key": storage_key,
         }
-        length: int = await self._redis.rpush(QUEUE_KEY, json.dumps(payload))
+        length: int = await self._redis.rpush(QUEUE_KEY, json.dumps(payload))  # type: ignore[misc]
         return length
 
     async def queue_length(self) -> int:
         """Return the current number of pending tasks."""
-        length: int = await self._redis.llen(QUEUE_KEY)
+        length: int = await self._redis.llen(QUEUE_KEY)  # type: ignore[misc]
         return length
 
     async def close(self) -> None:
