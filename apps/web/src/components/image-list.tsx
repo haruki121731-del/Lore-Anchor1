@@ -76,11 +76,17 @@ export function ImageList({ refreshKey }: ImageListProps) {
     fetchImages();
   }, [fetchImages, refreshKey]);
 
-  // Poll every 5 seconds
+  // Poll every 5 seconds, stop when all images are completed or failed
   useEffect(() => {
+    const allSettled =
+      images.length > 0 &&
+      images.every((img) => img.status === "completed" || img.status === "failed");
+
+    if (allSettled) return;
+
     const interval = setInterval(fetchImages, 5000);
     return () => clearInterval(interval);
-  }, [fetchImages]);
+  }, [fetchImages, images]);
 
   // Cleanup ref on unmount
   useEffect(() => {
