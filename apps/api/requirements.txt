@@ -8,6 +8,10 @@ supabase>=2.4.0,<3.0.0
 python-multipart>=0.0.9,<1.0.0
 python-jose[cryptography]>=3.3.0,<4.0.0
 
+# --- Dev / CI dependencies ---
+ruff>=0.4.0,<1.0.0
+mypy>=1.10.0,<2.0.0
+
 # --- Test dependencies ---
 pytest>=8.0.0,<9.0.0
 httpx>=0.27.0,<1.0.0

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from typing import Any
+
+from pydantic import BaseModel, Field
 
 
 # ------------------------------------------------------------------
@@ -10,11 +12,14 @@ from pydantic import BaseModel
 # ------------------------------------------------------------------
 
 class ImageRecord(BaseModel):
-    id: str
+    model_config = {"populate_by_name": True}
+
+    image_id: str = Field(alias="id")
     user_id: str
     original_url: str
     protected_url: str | None = None
     watermark_id: str | None = None
+    c2pa_manifest: dict[str, Any] | None = None
     status: str
     created_at: str
     updated_at: str
