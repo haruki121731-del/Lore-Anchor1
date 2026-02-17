@@ -1,0 +1,19 @@
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = false
+
+[[tool.mypy.overrides]]
+module = [
+    "boto3",
+    "boto3.*",
+    "mypy_boto3_s3",
+    "mypy_boto3_s3.*",
+    "jose",
+    "jose.*",
+    "redis.*",
+    "supabase",
+    "supabase.*",
+]
+ignore_missing_imports = true

@@ -22,7 +22,6 @@ References
 """
 from __future__ import annotations
 
-import hashlib
 import logging
 from enum import Enum
 from typing import TYPE_CHECKING

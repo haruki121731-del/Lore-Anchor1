@@ -52,7 +52,7 @@ class DatabaseService:
         response = (
             self._client.table(_TABLE_IMAGES).insert(row).execute()
         )
-        return dict(response.data[0])
+        return dict(response.data[0])  # type: ignore[arg-type]
 
     # ------------------------------------------------------------------
     # images table – READ
@@ -67,7 +67,7 @@ class DatabaseService:
             .execute()
         )
         if response.data:
-            return dict(response.data[0])
+            return dict(response.data[0])  # type: ignore[arg-type]
         return None
 
     def list_images_by_user(self, user_id: str) -> list[dict[str, Any]]:
@@ -79,7 +79,7 @@ class DatabaseService:
             .order("created_at", desc=True)
             .execute()
         )
-        return [dict(row) for row in response.data]
+        return [dict(row) for row in response.data]  # type: ignore[arg-type]
 
     # ------------------------------------------------------------------
     # images table – UPDATE
@@ -97,7 +97,7 @@ class DatabaseService:
             .eq("id", image_id)
             .execute()
         )
-        return dict(response.data[0])
+        return dict(response.data[0])  # type: ignore[arg-type]
 
     def set_protected_url(
         self,
@@ -111,7 +111,7 @@ class DatabaseService:
             .eq("id", image_id)
             .execute()
         )
-        return dict(response.data[0])
+        return dict(response.data[0])  # type: ignore[arg-type]
 
     def set_failed(self, image_id: str) -> dict[str, Any]:
         """Mark the image as ``failed``."""
@@ -132,7 +132,7 @@ class DatabaseService:
             .execute()
         )
         if response.data:
-            return dict(response.data[0])
+            return dict(response.data[0])  # type: ignore[arg-type]
         return None
 
 

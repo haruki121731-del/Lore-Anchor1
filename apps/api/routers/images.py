@@ -50,7 +50,7 @@ async def list_images(
 ) -> ImageListResponse:
     """Return all images belonging to the authenticated user, newest first."""
     rows = db.list_images_by_user(user_id)
-    return ImageListResponse(images=rows)
+    return ImageListResponse(images=rows)  # type: ignore[arg-type]
 
 
 # ------------------------------------------------------------------
@@ -145,6 +145,7 @@ async def upload_image(
         logger.info("[step 3/4] Supabase insert succeeded, image_id=%s", image_id)
 
         # 4. Enqueue task for the GPU worker
+        assert image_id is not None
         logger.info("[step 4/4] Enqueuing task for image_id=%s", image_id)
         await queue.enqueue(image_id=image_id, storage_key=storage_key)
         logger.info("[step 4/4] Redis enqueue succeeded")
@@ -168,7 +169,7 @@ async def upload_image(
             detail=detail,
         ) from exc
 
-    return UploadResponse(image_id=image_id, status="pending")
+    return UploadResponse(image_id=image_id, status="pending")  # type: ignore[arg-type]
 
 
 # ------------------------------------------------------------------
