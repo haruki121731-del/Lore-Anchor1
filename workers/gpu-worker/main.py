@@ -104,16 +104,17 @@ def _update_image_status(
     *,
     protected_url: str | None = None,
     watermark_id: str | None = None,
-    error_log: str | None = None,
 ) -> None:
-    """Update the ``images`` row for *image_id* in Supabase."""
+    """Update the ``images`` row for *image_id* in Supabase.
+
+    Note: error details are stored in ``tasks.error_log`` only — the
+    ``images`` table does not have an ``error_log`` column.
+    """
     data: dict[str, Any] = {"status": status}
     if protected_url is not None:
         data["protected_url"] = protected_url
     if watermark_id is not None:
         data["watermark_id"] = watermark_id
-    if error_log is not None:
-        data["error_log"] = error_log[:4000]
     try:
         sb.table("images").update(data).eq("id", image_id).execute()
         logger.info("images.status -> '%s' for image_id=%s", status, image_id)
@@ -361,9 +362,7 @@ def _run_consumer() -> None:
             )
 
             # --- Mark failure in Supabase ---
-            _update_image_status(
-                sb, image_id, "failed", error_log=error_detail,
-            )
+            _update_image_status(sb, image_id, "failed")
             if task_id:
                 _fail_task(sb, task_id, error_detail)
 
@@ -377,9 +376,7 @@ def _run_consumer() -> None:
             )
 
             # --- Mark failure in Supabase ---
-            _update_image_status(
-                sb, image_id, "failed", error_log=error_detail,
-            )
+            _update_image_status(sb, image_id, "failed")
             if task_id:
                 _fail_task(sb, task_id, error_detail)
 
