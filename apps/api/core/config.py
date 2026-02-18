@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     SUPABASE_URL: str = ""
     SUPABASE_SERVICE_ROLE_KEY: str = ""
 
+    # --- JWT (Supabase project JWT secret for HS256 verification) ---
+    JWT_SECRET: str = ""
+
     # --- Cloudflare R2 (optional in DEBUG mode) ---
     R2_ACCESS_KEY_ID: str = ""
     R2_SECRET_ACCESS_KEY: str = ""
