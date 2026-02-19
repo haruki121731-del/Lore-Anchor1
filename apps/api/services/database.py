@@ -86,7 +86,7 @@ class DatabaseService:
         # Get total count
         count_response = (
             self._client.table(_TABLE_IMAGES)
-            .select("id", count="exact")
+            .select("id", count="exact")  # type: ignore[arg-type]
             .eq("user_id", user_id)
             .neq("status", "deleted")
             .execute()

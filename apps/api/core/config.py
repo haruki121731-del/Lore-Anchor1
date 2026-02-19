@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     # --- Debug ---
     DEBUG: bool = False
 
-    def validate(self) -> None:
+    def check_required(self) -> None:
         """Validate that required env vars are set in non-DEBUG mode."""
         if self.DEBUG:
             return
