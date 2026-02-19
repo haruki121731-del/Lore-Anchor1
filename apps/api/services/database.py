@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from supabase import Client, create_client
+from supabase import Client, create_client  # type: ignore[attr-defined]
 
 from apps.api.core.config import get_settings
 
