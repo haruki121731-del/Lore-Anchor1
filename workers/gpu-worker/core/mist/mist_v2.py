@@ -127,11 +127,18 @@ def _get_vae(device):  # type: ignore[no-untyped-def]
     from diffusers import AutoencoderKL
 
     logger.info("Loading SD VAE (stabilityai/sd-vae-ft-mse) ...")
-    vae = AutoencoderKL.from_pretrained(
-        "stabilityai/sd-vae-ft-mse",
-        torch_dtype=torch.float32,
-        local_files_only=True,
-    )
+    try:
+        vae = AutoencoderKL.from_pretrained(
+            "stabilityai/sd-vae-ft-mse",
+            torch_dtype=torch.float32,
+            local_files_only=True,
+        )
+    except Exception:
+        logger.warning("VAE not found in local cache, downloading from HuggingFace Hub...")
+        vae = AutoencoderKL.from_pretrained(
+            "stabilityai/sd-vae-ft-mse",
+            torch_dtype=torch.float32,
+        )
     vae = vae.to(device).eval()
     for p in vae.parameters():
         p.requires_grad_(False)

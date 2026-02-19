@@ -564,44 +564,61 @@ def _run_consumer() -> None:
 # Entrypoint
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    # --- Validate environment ---
-    _validate_env()
-
-    # --- Startup diagnostics ---
-    logger.info("=" * 60)
-    logger.info("lore-anchor GPU Worker starting")
-    logger.info("=" * 60)
-    _log_gpu_info()
-    logger.info("Redis URL: %s", REDIS_URL.split("@")[-1])  # hide password
-    logger.info("Mist config: epsilon=%d, steps=%d", MIST_EPSILON, MIST_STEPS)
-    logger.info("Queue key: %s", QUEUE_KEY)
-    logger.info("Worker ID: %s", WORKER_ID)
-    logger.info("=" * 60)
-
-    # --- Start health check server ---
-    _start_health_server()
-
-    # --- Pre-load models ---
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    _preload_models(device)
-
-    # --- Graceful shutdown on SIGTERM (SaladCloud sends this on stop) ---
-    def _handle_sigterm(signum: int, frame: Any) -> None:
-        global _shutdown_requested
-        logger.info("Shutdown signal received, finishing current task...")
-        _shutdown_requested = True
-
-    signal.signal(signal.SIGTERM, _handle_sigterm)
-    signal.signal(signal.SIGINT, _handle_sigterm)
-
-    # --- Start BLPOP consumer loop ---
-    logger.info("Worker started, listening on queue: %s", QUEUE_KEY)
     try:
+        # --- Validate environment ---
+        _validate_env()
+
+        # --- Startup diagnostics ---
+        logger.info("=" * 60)
+        logger.info("lore-anchor GPU Worker starting")
+        logger.info("=" * 60)
+        _log_gpu_info()
+        logger.info("Redis URL: %s", REDIS_URL.split("@")[-1])  # hide password
+        logger.info("Mist config: epsilon=%d, steps=%d", MIST_EPSILON, MIST_STEPS)
+        logger.info("Queue key: %s", QUEUE_KEY)
+        logger.info("Worker ID: %s", WORKER_ID)
+        logger.info("=" * 60)
+
+        # --- Start health check server ---
+        _start_health_server()
+
+        # --- Pre-load models ---
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        _preload_models(device)
+
+        # --- Graceful shutdown on SIGTERM (SaladCloud sends this on stop) ---
+        def _handle_sigterm(signum: int, frame: Any) -> None:
+            global _shutdown_requested
+            logger.info("Shutdown signal received, finishing current task...")
+            _shutdown_requested = True
+
+        signal.signal(signal.SIGTERM, _handle_sigterm)
+        signal.signal(signal.SIGINT, _handle_sigterm)
+
+        # --- Verify Redis connectivity before entering main loop ---
+        logger.info("Testing Redis connection...")
+        _test_r = redis.from_url(REDIS_URL, decode_responses=True)
+        _test_r.ping()
+        logger.info("Redis connection OK")
+        del _test_r
+
+        # --- Start BLPOP consumer loop ---
+        logger.info("Worker ready, entering consumer loop on queue: %s", QUEUE_KEY)
         _run_consumer()
+
     except KeyboardInterrupt:
         logger.info("KeyboardInterrupt — exiting")
+    except SystemExit:
+        raise
+    except Exception:
+        logger.critical("Worker crashed during startup or operation", exc_info=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        time.sleep(3)  # allow SaladCloud to capture logs before container exits
+        sys.exit(1)
     finally:
         if _processing:
             logger.info("Waiting for current task to finish before exit...")
         logger.info("Worker stopped.")
-        sys.exit(0)
+        sys.stdout.flush()
+        sys.stderr.flush()

@@ -8,7 +8,6 @@ FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV HF_HOME=/app/hf_cache
-ENV HF_HUB_OFFLINE=1
 
 # --- System dependencies ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -38,11 +37,9 @@ RUN pip3 install --no-cache-dir -r requirements.txt \
 # --- Pre-download VAE model into image (eliminates runtime HuggingFace fetch) ---
 # Non-fatal: CI runners may lack network/disk for the ~335 MB model download.
 # The worker gracefully handles a missing cache at startup.
-ENV HF_HUB_OFFLINE=0
 RUN python3 -c "from diffusers import AutoencoderKL; AutoencoderKL.from_pretrained('stabilityai/sd-vae-ft-mse')" \
     && echo "VAE model baked into image at ${HF_HOME}" \
     || echo "WARN: VAE pre-download skipped (will download at runtime)"
-ENV HF_HUB_OFFLINE=1
 
 # --- Application code ---
 COPY . .
