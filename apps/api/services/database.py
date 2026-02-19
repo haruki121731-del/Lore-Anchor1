@@ -12,7 +12,7 @@ from supabase import Client, create_client
 from apps.api.core.config import get_settings
 
 # MDD Section 4.2 – valid status transitions
-_VALID_STATUSES: set[str] = {"pending", "processing", "completed", "failed"}
+_VALID_STATUSES: set[str] = {"pending", "processing", "completed", "failed", "deleted"}
 
 _TABLE_IMAGES: str = "images"
 _TABLE_TASKS: str = "tasks"
@@ -64,22 +64,48 @@ class DatabaseService:
             self._client.table(_TABLE_IMAGES)
             .select("*")
             .eq("id", image_id)
+            .neq("status", "deleted")
             .execute()
         )
         if response.data:
             return dict(response.data[0])  # type: ignore[arg-type]
         return None
 
-    def list_images_by_user(self, user_id: str) -> list[dict[str, Any]]:
-        """Return all image rows belonging to *user_id*, newest first."""
+    def list_images_by_user(
+        self,
+        user_id: str,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Return image rows belonging to *user_id* with pagination.
+
+        Returns:
+            (rows, total_count) tuple.
+        """
+        # Get total count
+        count_response = (
+            self._client.table(_TABLE_IMAGES)
+            .select("id", count="exact")
+            .eq("user_id", user_id)
+            .neq("status", "deleted")
+            .execute()
+        )
+        total = count_response.count or 0
+
+        # Get paginated rows
+        offset = (page - 1) * page_size
         response = (
             self._client.table(_TABLE_IMAGES)
             .select("*")
             .eq("user_id", user_id)
+            .neq("status", "deleted")
             .order("created_at", desc=True)
+            .range(offset, offset + page_size - 1)
             .execute()
         )
-        return [dict(row) for row in response.data]  # type: ignore[arg-type]
+        rows = [dict(row) for row in response.data]  # type: ignore[arg-type]
+        return rows, total
 
     # ------------------------------------------------------------------
     # images table – UPDATE
@@ -126,6 +152,17 @@ class DatabaseService:
     def set_failed(self, image_id: str) -> dict[str, Any]:
         """Mark the image as ``failed``."""
         return self.update_status(image_id, "failed")
+
+    # ------------------------------------------------------------------
+    # images table – DELETE (soft)
+    # ------------------------------------------------------------------
+
+    def delete_image(self, image_id: str) -> None:
+        """Soft-delete an image by setting status to 'deleted'."""
+        self._client.table(_TABLE_IMAGES).update(
+            {"status": "deleted"}
+        ).eq("id", image_id).execute()
+        logger.info("Image soft-deleted: image_id=%s", image_id)
 
     # ------------------------------------------------------------------
     # tasks table – READ
@@ -181,13 +218,24 @@ class DebugDatabaseService(DatabaseService):
 
     def get_image(self, image_id: str) -> dict[str, Any] | None:
         row = self._store.get(image_id)
-        return dict(row) if row else None
+        if row and row.get("status") != "deleted":
+            return dict(row)
+        return None
 
-    def list_images_by_user(self, user_id: str) -> list[dict[str, Any]]:
-        return [
+    def list_images_by_user(
+        self,
+        user_id: str,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[dict[str, Any]], int]:
+        all_rows = [
             dict(r) for r in self._store.values()
-            if r["user_id"] == user_id
+            if r["user_id"] == user_id and r.get("status") != "deleted"
         ]
+        total = len(all_rows)
+        offset = (page - 1) * page_size
+        return all_rows[offset:offset + page_size], total
 
     def update_status(self, image_id: str, status: str) -> dict[str, Any]:
         if status not in _VALID_STATUSES:
@@ -222,6 +270,11 @@ class DebugDatabaseService(DatabaseService):
         logger.info("[DEBUG] DB update: image_id=%s -> completed", image_id)
         return dict(row)
 
+    def delete_image(self, image_id: str) -> None:
+        row = self._store.get(image_id)
+        if row:
+            row["status"] = "deleted"
+            logger.info("[DEBUG] DB soft-delete: image_id=%s", image_id)
 
     def get_task_by_image_id(self, image_id: str) -> dict[str, Any] | None:
         """Debug stub — always returns ``None`` (no tasks table)."""

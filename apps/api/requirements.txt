@@ -7,6 +7,7 @@ redis>=5.0.0,<6.0.0
 supabase>=2.4.0,<3.0.0
 python-multipart>=0.0.9,<1.0.0
 python-jose[cryptography]>=3.3.0,<4.0.0
+slowapi>=0.1.9,<1.0.0
 
 # --- Dev / CI dependencies ---
 ruff>=0.4.0,<1.0.0

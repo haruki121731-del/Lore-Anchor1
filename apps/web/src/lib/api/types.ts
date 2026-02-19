@@ -15,3 +15,16 @@ export interface UploadResponse {
   image_id: string;
   status: ImageStatus;
 }
+
+export interface DeleteResponse {
+  image_id: string;
+  deleted: boolean;
+}
+
+export interface PaginatedImageList {
+  images: ImageRecord[];
+  total: number;
+  page: number;
+  page_size: number;
+  has_more: boolean;
+}

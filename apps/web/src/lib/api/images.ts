@@ -1,4 +1,9 @@
-import type { ImageRecord, UploadResponse } from "./types";
+import type {
+  DeleteResponse,
+  ImageRecord,
+  PaginatedImageList,
+  UploadResponse,
+} from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
@@ -62,9 +67,15 @@ export async function getImage(
 }
 
 export async function listImages(
-  token: string
-): Promise<ImageRecord[]> {
-  const res = await fetch(`${API_BASE}/api/v1/images/`, {
+  token: string,
+  page: number = 1,
+  pageSize: number = 20
+): Promise<PaginatedImageList> {
+  const params = new URLSearchParams({
+    page: String(page),
+    page_size: String(pageSize),
+  });
+  const res = await fetch(`${API_BASE}/api/v1/images/?${params}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
@@ -77,6 +88,26 @@ export async function listImages(
     }
     throw new Error(`Failed to fetch images (${res.status}): ${detail}`);
   }
-  const data = (await res.json()) as { images: ImageRecord[] };
-  return data.images;
+  return res.json() as Promise<PaginatedImageList>;
+}
+
+export async function deleteImage(
+  imageId: string,
+  token: string
+): Promise<DeleteResponse> {
+  const res = await fetch(`${API_BASE}/api/v1/images/${imageId}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const body = await res.json();
+      if (body.detail) detail = body.detail;
+    } catch {
+      // use statusText
+    }
+    throw new Error(`Failed to delete image (${res.status}): ${detail}`);
+  }
+  return res.json() as Promise<DeleteResponse>;
 }
