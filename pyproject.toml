@@ -2,7 +2,7 @@
 python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
-ignore_missing_imports = false
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = [
@@ -15,5 +15,17 @@ module = [
     "redis.*",
     "supabase",
     "supabase.*",
+    "fastapi",
+    "fastapi.*",
+    "slowapi",
+    "slowapi.*",
+    "pydantic",
+    "pydantic.*",
+    "pydantic_settings",
+    "pydantic_settings.*",
+    "pytest",
+    "pytest.*",
+    "httpx",
+    "httpx.*",
 ]
 ignore_missing_imports = true

@@ -14,7 +14,6 @@ from apps.api.core.config import get_settings
 from apps.api.core.security import get_current_user_id
 from apps.api.models.schemas import (
     DeleteResponse,
-    ImageListResponse,
     ImageRecord,
     PaginatedImageListResponse,
     TaskStatusResponse,
