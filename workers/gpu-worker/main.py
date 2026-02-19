@@ -278,7 +278,7 @@ def _log_gpu_info() -> None:
         logger.info("GPU count: %d", device_count)
         for i in range(device_count):
             name = torch.cuda.get_device_name(i)
-            mem = torch.cuda.get_device_properties(i).total_mem
+            mem = torch.cuda.get_device_properties(i).total_memory
             mem_gb = mem / (1024**3)
             logger.info("  GPU %d: %s (%.1f GB VRAM)", i, name, mem_gb)
         logger.info("Current device: %s", torch.cuda.current_device())
