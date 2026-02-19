@@ -6,13 +6,17 @@ import logging
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, status
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from apps.api.core.config import get_settings
 from apps.api.core.security import get_current_user_id
 from apps.api.models.schemas import (
+    DeleteResponse,
     ImageListResponse,
     ImageRecord,
+    PaginatedImageListResponse,
     TaskStatusResponse,
     UploadResponse,
 )
@@ -23,6 +27,8 @@ from apps.api.services.storage import StorageService, get_storage_service
 logger: logging.Logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/images", tags=["images"])
+
+limiter = Limiter(key_func=get_remote_address)
 
 # ------------------------------------------------------------------
 # Allowed MIME types for upload validation
@@ -35,22 +41,79 @@ _ALLOWED_CONTENT_TYPES: set[str] = {
 
 _MAX_FILE_SIZE: int = 20 * 1024 * 1024  # 20 MB
 
+# ------------------------------------------------------------------
+# Magic byte signatures for file type validation
+# ------------------------------------------------------------------
+_MAGIC_SIGNATURES: list[tuple[bytes, str]] = [
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+]
+
+
+def _validate_magic_bytes(file_bytes: bytes, declared_type: str) -> None:
+    """Validate file content matches declared MIME type via magic bytes."""
+    if len(file_bytes) < 12:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="File too small to be a valid image",
+        )
+
+    # Check standard signatures
+    for sig, mime in _MAGIC_SIGNATURES:
+        if file_bytes[:len(sig)] == sig:
+            if declared_type != mime:
+                raise HTTPException(
+                    status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                    detail=f"File content ({mime}) does not match declared type ({declared_type})",
+                )
+            return
+
+    # WebP: starts with RIFF....WEBP
+    if file_bytes[:4] == b"RIFF" and file_bytes[8:12] == b"WEBP":
+        if declared_type != "image/webp":
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail=f"File content (image/webp) does not match declared type ({declared_type})",
+            )
+        return
+
+    # No known signature matched
+    raise HTTPException(
+        status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+        detail="File content does not match any supported image format (PNG, JPEG, WebP)",
+    )
+
 
 # ------------------------------------------------------------------
 # GET /images/
 # ------------------------------------------------------------------
 @router.get(
     "/",
-    response_model=ImageListResponse,
+    response_model=PaginatedImageListResponse,
     summary="List images for the authenticated user",
 )
+@limiter.limit(get_settings().RATE_LIMIT_READ)
 async def list_images(
+    request: Request,
+    page: int = 1,
+    page_size: int = 20,
     user_id: str = Depends(get_current_user_id),
     db: DatabaseService = Depends(get_database_service),
-) -> ImageListResponse:
-    """Return all images belonging to the authenticated user, newest first."""
-    rows = db.list_images_by_user(user_id)
-    return ImageListResponse(images=rows)  # type: ignore[arg-type]
+) -> PaginatedImageListResponse:
+    """Return images belonging to the authenticated user, newest first."""
+    if page < 1:
+        page = 1
+    if page_size < 1 or page_size > 100:
+        page_size = 20
+
+    rows, total = db.list_images_by_user(user_id, page=page, page_size=page_size)
+    return PaginatedImageListResponse(
+        images=rows,  # type: ignore[arg-type]
+        total=total,
+        page=page,
+        page_size=page_size,
+        has_more=(page * page_size) < total,
+    )
 
 
 # ------------------------------------------------------------------
@@ -61,10 +124,13 @@ async def list_images(
     response_model=ImageRecord,
     summary="Get a single image by ID",
 )
+@limiter.limit(get_settings().RATE_LIMIT_READ)
 async def get_image(
+    request: Request,
     image_id: str,
     user_id: str = Depends(get_current_user_id),
     db: DatabaseService = Depends(get_database_service),
+    storage: StorageService = Depends(get_storage_service),
 ) -> ImageRecord:
     """Return a single image record. Returns 403 if it belongs to another user."""
     row = db.get_image(image_id)
@@ -78,6 +144,14 @@ async def get_image(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied",
         )
+    # Generate pre-signed URL for protected image
+    if row.get("protected_url"):
+        try:
+            row["protected_url"] = await storage.generate_presigned_url(
+                row["protected_url"], expires_in=3600,
+            )
+        except Exception:
+            logger.warning("Failed to generate presigned URL for %s", image_id)
     return ImageRecord(**row)
 
 
@@ -90,7 +164,9 @@ async def get_image(
     status_code=status.HTTP_201_CREATED,
     summary="Upload an image for protection",
 )
+@limiter.limit(get_settings().RATE_LIMIT_UPLOAD)
 async def upload_image(
+    request: Request,
     file: UploadFile,
     user_id: str = Depends(get_current_user_id),
     storage: StorageService = Depends(get_storage_service),
@@ -100,7 +176,7 @@ async def upload_image(
     """Accept an image upload and kick off the GPU protection pipeline.
 
     Flow:
-        1. Validate the uploaded file (type & size).
+        1. Validate the uploaded file (type, size, magic bytes).
         2. Upload the raw file to Cloudflare R2.
         3. Create an ``images`` row in Supabase (status = ``pending``).
         4. Push a task onto the Redis queue for the GPU worker.
@@ -122,6 +198,9 @@ async def upload_image(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"File size exceeds the {_MAX_FILE_SIZE // (1024 * 1024)} MB limit",
         )
+
+    # Validate magic bytes match declared content type
+    _validate_magic_bytes(file_bytes, content_type)
 
     # Derive a unique storage key so filenames never collide.
     ext: str = _extension_from_content_type(content_type)
@@ -170,6 +249,50 @@ async def upload_image(
         ) from exc
 
     return UploadResponse(image_id=image_id, status="pending")  # type: ignore[arg-type]
+
+
+# ------------------------------------------------------------------
+# DELETE /images/{image_id}
+# ------------------------------------------------------------------
+@router.delete(
+    "/{image_id}",
+    response_model=DeleteResponse,
+    summary="Delete an image",
+)
+@limiter.limit(get_settings().RATE_LIMIT_UPLOAD)
+async def delete_image(
+    request: Request,
+    image_id: str,
+    user_id: str = Depends(get_current_user_id),
+    db: DatabaseService = Depends(get_database_service),
+    storage: StorageService = Depends(get_storage_service),
+) -> DeleteResponse:
+    """Delete an image and its associated files from R2."""
+    row = db.get_image(image_id)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Image not found",
+        )
+    if row["user_id"] != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
+
+    # Delete files from R2
+    try:
+        if row.get("original_url"):
+            await storage.delete_file(row["original_url"])
+        if row.get("protected_url"):
+            await storage.delete_file(row["protected_url"])
+    except Exception:
+        logger.warning("Failed to delete R2 files for image %s", image_id)
+
+    # Soft-delete in DB
+    db.delete_image(image_id)
+
+    return DeleteResponse(image_id=image_id, deleted=True)
 
 
 # ------------------------------------------------------------------

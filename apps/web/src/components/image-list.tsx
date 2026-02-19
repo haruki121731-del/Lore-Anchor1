@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { ImageRecord, ImageStatus } from "@/lib/api/types";
-import { listImages } from "@/lib/api/images";
+import { listImages, deleteImage } from "@/lib/api/images";
 import { getSupabaseClient } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -36,13 +36,19 @@ interface ImageListProps {
   refreshKey: number;
 }
 
+const PAGE_SIZE = 20;
+
 export function ImageList({ refreshKey }: ImageListProps) {
   const [images, setImages] = useState<ImageRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [total, setTotal] = useState(0);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const mountedRef = useRef(true);
 
-  const fetchImages = useCallback(async () => {
+  const fetchImages = useCallback(async (targetPage: number = page) => {
     try {
       const supabase = getSupabaseClient();
       const {
@@ -54,9 +60,11 @@ export function ImageList({ refreshKey }: ImageListProps) {
         return;
       }
 
-      const data = await listImages(session.access_token);
+      const data = await listImages(session.access_token, targetPage, PAGE_SIZE);
       if (mountedRef.current) {
-        setImages(data);
+        setImages(data.images);
+        setHasMore(data.has_more);
+        setTotal(data.total);
         setError(null);
       }
     } catch (err) {
@@ -68,13 +76,35 @@ export function ImageList({ refreshKey }: ImageListProps) {
     } finally {
       if (mountedRef.current) setLoading(false);
     }
+  }, [page]);
+
+  const handleDelete = useCallback(async (imageId: string) => {
+    try {
+      setDeletingId(imageId);
+      const supabase = getSupabaseClient();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session) return;
+
+      await deleteImage(imageId, session.access_token);
+      setImages((prev) => prev.filter((img) => img.image_id !== imageId));
+      setTotal((prev) => prev - 1);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to delete image"
+      );
+    } finally {
+      setDeletingId(null);
+    }
   }, []);
 
-  // Initial fetch + refetch on refreshKey change
+  // Initial fetch + refetch on refreshKey or page change
   useEffect(() => {
     setLoading(true);
-    fetchImages();
-  }, [fetchImages, refreshKey]);
+    fetchImages(page);
+  }, [fetchImages, refreshKey, page]);
 
   // Poll every 5 seconds, stop when all images are completed or failed
   useEffect(() => {
@@ -84,9 +114,9 @@ export function ImageList({ refreshKey }: ImageListProps) {
 
     if (allSettled) return;
 
-    const interval = setInterval(fetchImages, 5000);
+    const interval = setInterval(() => fetchImages(page), 5000);
     return () => clearInterval(interval);
-  }, [fetchImages, images]);
+  }, [fetchImages, images, page]);
 
   // Cleanup ref on unmount
   useEffect(() => {
@@ -113,7 +143,7 @@ export function ImageList({ refreshKey }: ImageListProps) {
           onClick={() => {
             setError(null);
             setLoading(true);
-            fetchImages();
+            fetchImages(page);
           }}
         >
           Retry
@@ -181,9 +211,55 @@ export function ImageList({ refreshKey }: ImageListProps) {
                 </a>
               </Button>
             )}
+
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={deletingId === img.image_id}
+              onClick={() => handleDelete(img.image_id)}
+              className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
+            >
+              {deletingId === img.image_id ? (
+                <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+              ) : (
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                    d="m19 7-.867 12.142A2 2 0 0 1 16.138 21H7.862a2 2 0 0 1-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v3M4 7h16"
+                  />
+                </svg>
+              )}
+            </Button>
           </CardContent>
         </Card>
       ))}
+
+      {/* Pagination controls */}
+      {total > PAGE_SIZE && (
+        <div className="flex items-center justify-between pt-4">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={page <= 1}
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+          >
+            Previous
+          </Button>
+          <span className="text-sm text-zinc-500">
+            Page {page} of {Math.ceil(total / PAGE_SIZE)}
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!hasMore}
+            onClick={() => setPage((p) => p + 1)}
+          >
+            Next
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

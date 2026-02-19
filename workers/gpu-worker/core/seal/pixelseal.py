@@ -270,10 +270,12 @@ def _get_nn_models(device):  # type: ignore[no-untyped-def]
         _nn_dec.load_state_dict(torch.load(dec_path, map_location=device, weights_only=True))
         logger.info("PixelSeal NN weights loaded from %s", _NN_WEIGHTS_DIR)
     else:
-        logger.warning(
-            "PixelSeal NN weights not found at %s — "
-            "extraction will be unreliable. Use DWT backend or train weights.",
-            _NN_WEIGHTS_DIR,
+        _nn_enc = None
+        _nn_dec = None
+        raise ValueError(
+            f"PixelSeal NN weights not found at {_NN_WEIGHTS_DIR}. "
+            "The NN backend requires pretrained encoder.pt and decoder.pt. "
+            "Use backend='dwt' instead, or train and place weights."
         )
 
     return _nn_enc, _nn_dec

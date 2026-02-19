@@ -6,14 +6,22 @@ import logging
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from apps.api.core.config import get_settings
 from apps.api.routers import images
 from apps.api.routers.images import tasks_router
 
 logger: logging.Logger = logging.getLogger(__name__)
+
+# ------------------------------------------------------------------
+# Rate limiter
+# ------------------------------------------------------------------
+limiter = Limiter(key_func=get_remote_address)
 
 # ------------------------------------------------------------------
 # Lifespan (startup / shutdown)
@@ -23,6 +31,7 @@ logger: logging.Logger = logging.getLogger(__name__)
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan handler."""
     settings = get_settings()
+    settings.validate()
     if settings.DEBUG:
         logger.warning(
             "=== DEBUG MODE ACTIVE === "
@@ -41,6 +50,10 @@ app = FastAPI(
     version="0.1.0",
     lifespan=_lifespan,
 )
+
+# Attach rate limiter
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # ------------------------------------------------------------------
 # CORS — allow the Next.js frontend in dev & production

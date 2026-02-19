@@ -39,8 +39,32 @@ class Settings(BaseSettings):
     # --- CORS ---
     CORS_ORIGINS: str = ""
 
+    # --- Rate limiting ---
+    RATE_LIMIT_UPLOAD: str = "10/minute"
+    RATE_LIMIT_READ: str = "60/minute"
+
     # --- Debug ---
     DEBUG: bool = False
+
+    def validate(self) -> None:
+        """Validate that required env vars are set in non-DEBUG mode."""
+        if self.DEBUG:
+            return
+        required = {
+            "SUPABASE_URL": self.SUPABASE_URL,
+            "SUPABASE_SERVICE_ROLE_KEY": self.SUPABASE_SERVICE_ROLE_KEY,
+            "JWT_SECRET": self.JWT_SECRET,
+            "R2_ACCESS_KEY_ID": self.R2_ACCESS_KEY_ID,
+            "R2_SECRET_ACCESS_KEY": self.R2_SECRET_ACCESS_KEY,
+            "R2_ENDPOINT_URL": self.R2_ENDPOINT_URL,
+            "R2_BUCKET_NAME": self.R2_BUCKET_NAME,
+            "REDIS_URL": self.REDIS_URL,
+        }
+        missing = [k for k, v in required.items() if not v]
+        if missing:
+            raise ValueError(
+                f"Missing required environment variables (DEBUG=False): {', '.join(missing)}"
+            )
 
 
 @lru_cache(maxsize=1)

@@ -29,9 +29,22 @@ class ImageListResponse(BaseModel):
     images: list[ImageRecord]
 
 
+class PaginatedImageListResponse(BaseModel):
+    images: list[ImageRecord]
+    total: int
+    page: int
+    page_size: int
+    has_more: bool
+
+
 class UploadResponse(BaseModel):
     image_id: str
     status: str
+
+
+class DeleteResponse(BaseModel):
+    image_id: str
+    deleted: bool
 
 
 # ------------------------------------------------------------------

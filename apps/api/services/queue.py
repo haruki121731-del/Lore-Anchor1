@@ -11,6 +11,7 @@ import redis.asyncio as aioredis
 from apps.api.core.config import get_settings
 
 QUEUE_KEY: str = "lore_anchor_tasks"
+DEAD_LETTER_KEY: str = "lore_anchor_dead_letters"
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -40,6 +41,11 @@ class QueueService:
     async def queue_length(self) -> int:
         """Return the current number of pending tasks."""
         length: int = await self._redis.llen(QUEUE_KEY)  # type: ignore[misc]
+        return length
+
+    async def dlq_length(self) -> int:
+        """Return the current number of dead-letter entries."""
+        length: int = await self._redis.llen(DEAD_LETTER_KEY)  # type: ignore[misc]
         return length
 
     async def close(self) -> None:

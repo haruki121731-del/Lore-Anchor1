@@ -11,8 +11,25 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 
 logger = logging.getLogger(__name__)
+
+
+def _get_signing_credentials() -> tuple[bytes, bytes]:
+    """Return (cert_pem, key_pem) from env vars or dev fallback."""
+    cert_pem = os.environ.get("C2PA_CERT_PEM", "")
+    key_pem = os.environ.get("C2PA_KEY_PEM", "")
+
+    if cert_pem and key_pem:
+        logger.info("Using production C2PA certificate from environment")
+        return cert_pem.encode(), key_pem.encode()
+
+    logger.warning(
+        "C2PA_CERT_PEM / C2PA_KEY_PEM not set — using DEV self-signed cert. "
+        "NOT suitable for production."
+    )
+    return _DEV_CERT, _DEV_KEY
 
 
 def sign_c2pa(input_path: str, output_path: str) -> None:
@@ -53,11 +70,10 @@ def sign_c2pa(input_path: str, output_path: str) -> None:
 
         builder = Builder(manifest_json)
 
-        # NOTE: In production, use a real certificate and private key.
-        # For development, c2pa-python can generate a self-signed signer.
+        cert_pem, key_pem = _get_signing_credentials()
         signer = create_signer(
-            sign_cert=_DEV_CERT,
-            private_key=_DEV_KEY,
+            sign_cert=cert_pem,
+            private_key=key_pem,
             signing_alg=SigningAlg.ES256,
             ta_url=None,
         )
