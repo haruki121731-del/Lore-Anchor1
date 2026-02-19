@@ -290,14 +290,22 @@ def _log_gpu_info() -> None:
 # VAE pre-download
 # ---------------------------------------------------------------------------
 def _preload_models(device: torch.device) -> None:
-    """Pre-download VAE model so the first task is not blocked."""
+    """Load VAE model from baked-in HuggingFace cache (no network required)."""
+    hf_home = os.getenv("HF_HOME", "~/.cache/huggingface")
+    logger.info("HF_HOME=%s", hf_home)
     try:
         from core.mist.mist_v2 import _get_vae
-        logger.info("Pre-loading VAE model...")
+        logger.info("Pre-loading VAE model (local_files_only=True)...")
         _get_vae(device)
         logger.info("VAE model pre-loaded successfully")
     except Exception:
-        logger.warning("Failed to pre-load VAE model (will retry on first task)", exc_info=True)
+        logger.error(
+            "Failed to pre-load VAE model. "
+            "Ensure the model is baked into the Docker image at HF_HOME=%s. "
+            "The worker will fall back to freq mode for Mist v2.",
+            hf_home,
+            exc_info=True,
+        )
 
 
 # ---------------------------------------------------------------------------

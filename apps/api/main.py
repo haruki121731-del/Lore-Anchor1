@@ -31,7 +31,7 @@ limiter = Limiter(key_func=get_remote_address)
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan handler."""
     settings = get_settings()
-    settings.validate()
+    settings.check_required()
     if settings.DEBUG:
         logger.warning(
             "=== DEBUG MODE ACTIVE === "
@@ -53,7 +53,7 @@ app = FastAPI(
 
 # Attach rate limiter
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 
 # ------------------------------------------------------------------
 # CORS — allow the Next.js frontend in dev & production
