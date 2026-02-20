@@ -23,21 +23,24 @@ ALTER TABLE public.images ENABLE ROW LEVEL SECURITY;
 
 -- 3. Policy: allow the service_role key to do everything (backend API)
 --    service_role automatically bypasses RLS, so this is a safety net.
-CREATE POLICY IF NOT EXISTS "service_role_full_access"
+DROP POLICY IF EXISTS "service_role_full_access" ON public.images;
+CREATE POLICY "service_role_full_access"
     ON public.images
     FOR ALL
     USING (true)
     WITH CHECK (true);
 
 -- 4. Policy: authenticated users can SELECT their own rows
-CREATE POLICY IF NOT EXISTS "users_select_own"
+DROP POLICY IF EXISTS "users_select_own" ON public.images;
+CREATE POLICY "users_select_own"
     ON public.images
     FOR SELECT
     TO authenticated
     USING (auth.uid() = user_id);
 
 -- 5. Policy: authenticated users can INSERT rows for themselves
-CREATE POLICY IF NOT EXISTS "users_insert_own"
+DROP POLICY IF EXISTS "users_insert_own" ON public.images;
+CREATE POLICY "users_insert_own"
     ON public.images
     FOR INSERT
     TO authenticated

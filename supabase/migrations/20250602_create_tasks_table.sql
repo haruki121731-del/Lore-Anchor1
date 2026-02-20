@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS public.tasks (
 -- RLS: authenticated users can SELECT tasks linked to their own images
 ALTER TABLE public.tasks ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Users can view own tasks" ON public.tasks;
 CREATE POLICY "Users can view own tasks"
     ON public.tasks
     FOR SELECT
@@ -25,6 +26,7 @@ CREATE POLICY "Users can view own tasks"
     );
 
 -- service_role bypasses RLS automatically, but add explicit policy for clarity
+DROP POLICY IF EXISTS "service_role_full_access" ON public.tasks;
 CREATE POLICY "service_role_full_access"
     ON public.tasks
     FOR ALL
