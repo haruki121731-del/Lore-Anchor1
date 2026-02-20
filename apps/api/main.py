@@ -60,8 +60,9 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # ty
 # ------------------------------------------------------------------
 
 _default_origins = [
-    "http://localhost:3000",     # Next.js dev server
-    "https://lore-anchor.com",  # production (placeholder)
+    "http://localhost:3000",              # Next.js dev server
+    "https://lore-anchor-web.vercel.app", # Vercel production
+    "https://lore-anchor.com",            # custom domain (future)
 ]
 _extra = get_settings().CORS_ORIGINS
 _origins = _default_origins + [o.strip() for o in _extra.split(",") if o.strip()] if _extra else _default_origins

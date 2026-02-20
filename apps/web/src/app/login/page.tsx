@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { getSupabaseClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,7 +14,9 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 
-export default function LoginPage() {
+function LoginPageContent() {
+  const searchParams = useSearchParams();
+  const authError = searchParams.get("error");
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
@@ -53,6 +56,13 @@ export default function LoginPage() {
           <CardDescription>Sign in to protect your images</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
+          {authError && (
+            <div className="rounded-md bg-red-50 p-3 dark:bg-red-950">
+              <p className="text-center text-sm text-red-600 dark:text-red-400">
+                Authentication failed. Please try again.
+              </p>
+            </div>
+          )}
           <form onSubmit={handleEmailLogin} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
@@ -113,5 +123,13 @@ export default function LoginPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense>
+      <LoginPageContent />
+    </Suspense>
   );
 }
