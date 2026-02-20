@@ -21,22 +21,19 @@ CREATE TABLE IF NOT EXISTS public.images (
 -- 2. Enable RLS (required by Supabase best-practice)
 ALTER TABLE public.images ENABLE ROW LEVEL SECURITY;
 
--- 3. Policy: allow the service_role key to do everything (backend API)
---    service_role automatically bypasses RLS, so this is a safety net.
+-- 3. service_role bypasses RLS automatically — no explicit policy needed.
+--    Previously a "service_role_full_access" policy with USING(true) existed here,
+--    but without a TO clause it applied to ALL roles, which is a security risk.
 DROP POLICY IF EXISTS "service_role_full_access" ON public.images;
-CREATE POLICY "service_role_full_access"
-    ON public.images
-    FOR ALL
-    USING (true)
-    WITH CHECK (true);
 
 -- 4. Policy: authenticated users can SELECT their own rows
+--    (SELECT auth.uid()) is wrapped per Supabase best-practice for query plan caching.
 DROP POLICY IF EXISTS "users_select_own" ON public.images;
 CREATE POLICY "users_select_own"
     ON public.images
     FOR SELECT
     TO authenticated
-    USING (auth.uid() = user_id);
+    USING ((SELECT auth.uid()) = user_id);
 
 -- 5. Policy: authenticated users can INSERT rows for themselves
 DROP POLICY IF EXISTS "users_insert_own" ON public.images;
@@ -44,19 +41,23 @@ CREATE POLICY "users_insert_own"
     ON public.images
     FOR INSERT
     TO authenticated
-    WITH CHECK (auth.uid() = user_id);
+    WITH CHECK ((SELECT auth.uid()) = user_id);
 
 -- 6. Index for fast lookups by user
 CREATE INDEX IF NOT EXISTS idx_images_user_id ON public.images (user_id);
 
 -- 7. Auto-update updated_at on row modification
+--    SECURITY DEFINER ensures reliable execution regardless of caller RLS context.
 CREATE OR REPLACE FUNCTION public.set_updated_at()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
 BEGIN
     NEW.updated_at = now();
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
 DROP TRIGGER IF EXISTS trg_images_updated_at ON public.images;
 CREATE TRIGGER trg_images_updated_at
