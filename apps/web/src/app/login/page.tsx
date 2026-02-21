@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { getSupabaseClient } from "@/lib/supabase/client";
@@ -15,27 +15,115 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 
-function mapAuthError(errorParam: string | null): string | null {
-  if (!errorParam) return null;
-  return "認証に失敗しました。ブラウザを更新して再度お試しください。";
+type AuthSettingsResponse = {
+  external?: Record<string, boolean>;
+};
+
+function mapAuthError(errorParam: string | null, errorDescription: string | null): string | null {
+  if (!errorParam && !errorDescription) return null;
+
+  const raw = `${errorParam ?? ""} ${errorDescription ?? ""}`.toLowerCase();
+  if (raw.includes("provider is not enabled") || raw.includes("unsupported provider")) {
+    return "Googleログインが無効です。管理者が Supabase の Google Provider を有効化してください。";
+  }
+  if (raw.includes("redirect") && raw.includes("allow")) {
+    return "認証リダイレクトURLが許可されていません。Supabase の Redirect URL 設定を確認してください。";
+  }
+  if (raw.includes("access_denied")) {
+    return "認証がキャンセルされました。もう一度お試しください。";
+  }
+  return "認証に失敗しました。時間をおいて再度お試しください。";
+}
+
+function mapSupabaseError(messageText: string): string {
+  const lower = messageText.toLowerCase();
+  if (lower.includes("invalid email")) return "メールアドレスの形式が正しくありません。";
+  if (lower.includes("email provider") && lower.includes("disabled")) {
+    return "メール認証が無効です。管理者が Supabase の Email Provider を有効化してください。";
+  }
+  if (lower.includes("provider is not enabled") || lower.includes("unsupported provider")) {
+    return "Googleログインが無効です。管理者が Supabase の Google Provider を有効化してください。";
+  }
+  if (lower.includes("redirect") && lower.includes("allow")) {
+    return "認証リダイレクトURLが許可されていません。環境変数 NEXT_PUBLIC_SITE_URL と Supabase 設定を確認してください。";
+  }
+  if (lower.includes("rate")) return "試行回数が多すぎます。少し待ってから再度お試しください。";
+  if (lower.includes("network")) return "ネットワークエラーが発生しました。接続を確認してください。";
+  return "認証に失敗しました。時間をおいて再度お試しください。";
+}
+
+function normalizedSiteUrl(): string | null {
+  const site = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+  if (!site) return null;
+  return site.replace(/\/+$/, "");
+}
+
+function callbackUrlFromEnvOrCurrentOrigin(): string {
+  const site = normalizedSiteUrl();
+  const origin = site ?? location.origin;
+  return `${origin}/auth/callback`;
 }
 
 function LoginPageContent() {
   const searchParams = useSearchParams();
-  const authError = mapAuthError(searchParams.get("error"));
+
+  const authError = mapAuthError(
+    searchParams.get("error"),
+    searchParams.get("error_description")
+  );
+
   const [email, setEmail] = useState("");
   const [loadingEmail, setLoadingEmail] = useState(false);
   const [loadingGoogle, setLoadingGoogle] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  function mapSupabaseError(messageText: string): string {
-    const lower = messageText.toLowerCase();
-    if (lower.includes("invalid email")) return "メールアドレスの形式が正しくありません。";
-    if (lower.includes("rate")) return "試行回数が多すぎます。少し待ってから再度お試しください。";
-    if (lower.includes("network")) return "ネットワークエラーが発生しました。接続を確認してください。";
-    return "認証に失敗しました。時間をおいて再度お試しください。";
-  }
+  const [googleEnabled, setGoogleEnabled] = useState(true);
+  const [emailEnabled, setEmailEnabled] = useState(true);
+  const [configNotice, setConfigNotice] = useState<string | null>(null);
+
+  const siteUrl = useMemo(() => normalizedSiteUrl(), []);
+
+  useEffect(() => {
+    if (!siteUrl) return;
+    const current = window.location.origin.replace(/\/+$/, "");
+    if (current !== siteUrl) {
+      setConfigNotice(
+        `この環境はプレビューURLです。認証コールバックは ${siteUrl} に固定されます。`
+      );
+    }
+  }, [siteUrl]);
+
+  useEffect(() => {
+    async function loadAuthSettings() {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+      if (!supabaseUrl || !anonKey) return;
+
+      try {
+        const res = await fetch(`${supabaseUrl}/auth/v1/settings`, {
+          headers: { apikey: anonKey },
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+
+        const json = (await res.json()) as AuthSettingsResponse;
+        const external = json.external;
+        if (!external) return;
+
+        if (typeof external.google === "boolean") {
+          setGoogleEnabled(external.google);
+        }
+        if (typeof external.email === "boolean") {
+          setEmailEnabled(external.email);
+        }
+      } catch {
+        // If settings fetch fails, keep defaults so login remains usable.
+      }
+    }
+
+    void loadAuthSettings();
+  }, []);
 
   async function handleEmailLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -43,16 +131,22 @@ function LoginPageContent() {
     setMessage(null);
     setErrorMessage(null);
 
+    if (!emailEnabled) {
+      setErrorMessage("メール認証が無効です。管理者へご連絡ください。");
+      setLoadingEmail(false);
+      return;
+    }
+
     const supabase = getSupabaseClient();
     const { error } = await supabase.auth.signInWithOtp({
       email,
-      options: { emailRedirectTo: `${location.origin}/auth/callback` },
+      options: { emailRedirectTo: callbackUrlFromEnvOrCurrentOrigin() },
     });
 
     if (error) {
       setErrorMessage(mapSupabaseError(error.message));
     } else {
-      setMessage("ログインリンクを送信しました。メールをご確認ください。");
+      setMessage("ログインリンクを送信しました。受信箱と迷惑メールをご確認ください。");
     }
     setLoadingEmail(false);
   }
@@ -61,11 +155,18 @@ function LoginPageContent() {
     setLoadingGoogle(true);
     setMessage(null);
     setErrorMessage(null);
+
+    if (!googleEnabled) {
+      setErrorMessage("Googleログインは現在無効です。メールリンクをご利用ください。");
+      setLoadingGoogle(false);
+      return;
+    }
+
     try {
       const supabase = getSupabaseClient();
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
-        options: { redirectTo: `${location.origin}/auth/callback` },
+        options: { redirectTo: callbackUrlFromEnvOrCurrentOrigin() },
       });
       if (error) {
         setErrorMessage(mapSupabaseError(error.message));
@@ -93,6 +194,12 @@ function LoginPageContent() {
             </div>
           )}
 
+          {configNotice && (
+            <div className="rounded-md border border-amber-300/40 bg-amber-100/40 p-3 dark:bg-amber-900/20">
+              <p className="text-center text-xs text-amber-800 dark:text-amber-200">{configNotice}</p>
+            </div>
+          )}
+
           <div className="rounded-xl border border-cyan-400/30 bg-cyan-500/10 p-4 text-sm">
             <p className="font-semibold text-cyan-900 dark:text-cyan-100">ログイン方法</p>
             <ul className="mt-2 list-disc pl-5 text-cyan-900/80 dark:text-cyan-100/80">
@@ -100,6 +207,18 @@ function LoginPageContent() {
               <li>メールリンク: パスワード不要で安全にログイン</li>
             </ul>
           </div>
+
+          {!googleEnabled && (
+            <p className="text-center text-xs text-amber-700 dark:text-amber-300">
+              Googleログインは現在無効です（Supabase設定）。
+            </p>
+          )}
+
+          {!emailEnabled && (
+            <p className="text-center text-xs text-amber-700 dark:text-amber-300">
+              メール認証は現在無効です（Supabase設定）。
+            </p>
+          )}
 
           <form onSubmit={handleEmailLogin} className="space-y-4">
             <div className="space-y-2">
@@ -113,7 +232,7 @@ function LoginPageContent() {
                 required
               />
             </div>
-            <Button type="submit" className="w-full" disabled={loadingEmail}>
+            <Button type="submit" className="w-full" disabled={loadingEmail || !emailEnabled}>
               {loadingEmail ? "送信中..." : "メールリンクを送信"}
             </Button>
           </form>
@@ -140,7 +259,7 @@ function LoginPageContent() {
           <Button
             variant="outline"
             className="w-full"
-            disabled={loadingGoogle}
+            disabled={loadingGoogle || !googleEnabled}
             onClick={handleGoogleLogin}
           >
             <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24">
