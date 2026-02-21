@@ -31,10 +31,11 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
+  const isLandingPage = request.nextUrl.pathname === "/";
   const isLoginPage = request.nextUrl.pathname === "/login";
   const isAuthCallback = request.nextUrl.pathname === "/auth/callback";
 
-  if (!user && !isLoginPage && !isAuthCallback) {
+  if (!user && !isLandingPage && !isLoginPage && !isAuthCallback) {
     const loginUrl = request.nextUrl.clone();
     loginUrl.pathname = "/login";
     return NextResponse.redirect(loginUrl);

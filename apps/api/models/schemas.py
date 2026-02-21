@@ -20,6 +20,7 @@ class ImageRecord(BaseModel):
     protected_url: str | None = None
     watermark_id: str | None = None
     c2pa_manifest: dict[str, Any] | None = None
+    download_count: int = 0
     status: str
     created_at: str
     updated_at: str
@@ -47,6 +48,11 @@ class DeleteResponse(BaseModel):
     deleted: bool
 
 
+class DownloadTrackedResponse(BaseModel):
+    image_id: str
+    download_count: int
+
+
 # ------------------------------------------------------------------
 # Task schemas
 # ------------------------------------------------------------------
@@ -57,3 +63,9 @@ class TaskStatusResponse(BaseModel):
     error_log: str | None = None
     started_at: str | None = None
     completed_at: str | None = None
+
+
+class RetryResponse(BaseModel):
+    image_id: str
+    status: str
+    queued: bool

@@ -2,6 +2,7 @@
 
 import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { getSupabaseClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,17 +15,33 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 
+function mapAuthError(errorParam: string | null): string | null {
+  if (!errorParam) return null;
+  return "認証に失敗しました。ブラウザを更新して再度お試しください。";
+}
+
 function LoginPageContent() {
   const searchParams = useSearchParams();
-  const authError = searchParams.get("error");
+  const authError = mapAuthError(searchParams.get("error"));
   const [email, setEmail] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState("");
+  const [loadingEmail, setLoadingEmail] = useState(false);
+  const [loadingGoogle, setLoadingGoogle] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  function mapSupabaseError(messageText: string): string {
+    const lower = messageText.toLowerCase();
+    if (lower.includes("invalid email")) return "メールアドレスの形式が正しくありません。";
+    if (lower.includes("rate")) return "試行回数が多すぎます。少し待ってから再度お試しください。";
+    if (lower.includes("network")) return "ネットワークエラーが発生しました。接続を確認してください。";
+    return "認証に失敗しました。時間をおいて再度お試しください。";
+  }
 
   async function handleEmailLogin(e: React.FormEvent) {
     e.preventDefault();
-    setLoading(true);
-    setMessage("");
+    setLoadingEmail(true);
+    setMessage(null);
+    setErrorMessage(null);
 
     const supabase = getSupabaseClient();
     const { error } = await supabase.auth.signInWithOtp({
@@ -33,36 +50,57 @@ function LoginPageContent() {
     });
 
     if (error) {
-      setMessage(error.message);
+      setErrorMessage(mapSupabaseError(error.message));
     } else {
-      setMessage("Check your email for a login link!");
+      setMessage("ログインリンクを送信しました。メールをご確認ください。");
     }
-    setLoading(false);
+    setLoadingEmail(false);
   }
 
   async function handleGoogleLogin() {
-    const supabase = getSupabaseClient();
-    await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: { redirectTo: `${location.origin}/auth/callback` },
-    });
+    setLoadingGoogle(true);
+    setMessage(null);
+    setErrorMessage(null);
+    try {
+      const supabase = getSupabaseClient();
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: { redirectTo: `${location.origin}/auth/callback` },
+      });
+      if (error) {
+        setErrorMessage(mapSupabaseError(error.message));
+      }
+    } catch {
+      setErrorMessage("ネットワークエラーが発生しました。接続を確認してください。");
+    } finally {
+      setLoadingGoogle(false);
+    }
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 dark:bg-zinc-950">
-      <Card className="w-full max-w-md">
+    <div className="auth-shell">
+      <Card className="auth-card w-full max-w-lg">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl">Lore Anchor</CardTitle>
-          <CardDescription>Sign in to protect your images</CardDescription>
+          <CardTitle className="text-3xl">Lore Anchor ベータ</CardTitle>
+          <CardDescription>
+            ログイン後に、画像保護パイプラインをそのまま体験できます。
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           {authError && (
-            <div className="rounded-md bg-red-50 p-3 dark:bg-red-950">
-              <p className="text-center text-sm text-red-600 dark:text-red-400">
-                Authentication failed. Please try again.
-              </p>
+            <div className="rounded-md border border-rose-300/40 bg-rose-100/50 p-3 dark:bg-rose-900/20">
+              <p className="text-center text-sm text-rose-700 dark:text-rose-200">{authError}</p>
             </div>
           )}
+
+          <div className="rounded-xl border border-cyan-400/30 bg-cyan-500/10 p-4 text-sm">
+            <p className="font-semibold text-cyan-900 dark:text-cyan-100">ログイン方法</p>
+            <ul className="mt-2 list-disc pl-5 text-cyan-900/80 dark:text-cyan-100/80">
+              <li>Google: ワンクリックですぐ開始</li>
+              <li>メールリンク: パスワード不要で安全にログイン</li>
+            </ul>
+          </div>
+
           <form onSubmit={handleEmailLogin} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
@@ -75,15 +113,19 @@ function LoginPageContent() {
                 required
               />
             </div>
-            <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? "Sending..." : "Send Magic Link"}
+            <Button type="submit" className="w-full" disabled={loadingEmail}>
+              {loadingEmail ? "送信中..." : "メールリンクを送信"}
             </Button>
           </form>
 
-          {message && (
-            <p className="text-center text-sm text-zinc-600 dark:text-zinc-400">
-              {message}
+          {errorMessage && (
+            <p className="text-center text-sm text-rose-600 dark:text-rose-300">
+              {errorMessage}
             </p>
+          )}
+
+          {message && (
+            <p className="text-center text-sm text-emerald-700 dark:text-emerald-300">{message}</p>
           )}
 
           <div className="relative">
@@ -91,13 +133,14 @@ function LoginPageContent() {
               <span className="w-full border-t" />
             </div>
             <div className="relative flex justify-center text-xs uppercase">
-              <span className="bg-card px-2 text-muted-foreground">Or</span>
+              <span className="bg-card px-2 text-muted-foreground">または</span>
             </div>
           </div>
 
           <Button
             variant="outline"
             className="w-full"
+            disabled={loadingGoogle}
             onClick={handleGoogleLogin}
           >
             <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24">
@@ -118,8 +161,18 @@ function LoginPageContent() {
                 fill="#EA4335"
               />
             </svg>
-            Continue with Google
+            {loadingGoogle ? "Googleへ接続中..." : "Googleでログイン"}
           </Button>
+
+          <p className="text-center text-xs text-zinc-500">
+            ログイン後は <strong>1枚アップロード</strong> して保護完了までご確認ください。
+          </p>
+
+          <div className="text-center">
+            <Link className="text-sm text-cyan-700 underline dark:text-cyan-300" href="/">
+              トップページへ戻る
+            </Link>
+          </div>
         </CardContent>
       </Card>
     </div>

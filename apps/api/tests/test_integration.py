@@ -46,8 +46,10 @@ def integration_client():
     """TestClient with a shared DebugDatabaseService across all requests."""
     shared_db = DebugDatabaseService()
     app.dependency_overrides[get_database_service] = lambda: shared_db
+    app.state._test_shared_db = shared_db
     yield TestClient(app)
     app.dependency_overrides.pop(get_database_service, None)
+    del app.state._test_shared_db
 
 
 # ---------------------------------------------------------------------------
@@ -105,3 +107,51 @@ def test_list_images_contains_uploaded_image(integration_client):
     data = list_resp.json()
     image_ids = [img["image_id"] for img in data["images"]]
     assert image_id in image_ids, f"image_id {image_id} not found in image list: {image_ids}"
+
+
+def test_retry_failed_task_resets_to_pending(integration_client):
+    """Retry endpoint should reset failed image to pending and enqueue."""
+    upload_resp = integration_client.post(
+        "/api/v1/images/upload",
+        files={"file": ("test.png", io.BytesIO(_PNG_BYTES), "image/png")},
+    )
+    assert upload_resp.status_code == 201
+    image_id = upload_resp.json()["image_id"]
+
+    shared_db: DebugDatabaseService = integration_client.app.state._test_shared_db
+    shared_db.set_failed(image_id)
+
+    retry_resp = integration_client.post(f"/api/v1/tasks/{image_id}/retry")
+    assert retry_resp.status_code == 200, retry_resp.text
+    retry_data = retry_resp.json()
+    assert retry_data["queued"] is True
+    assert retry_data["status"] == "pending"
+
+    get_resp = integration_client.get(f"/api/v1/images/{image_id}")
+    assert get_resp.status_code == 200
+    assert get_resp.json()["status"] == "pending"
+
+
+def test_track_download_increments_download_count(integration_client):
+    """Download tracking endpoint should increment count for completed image."""
+    upload_resp = integration_client.post(
+        "/api/v1/images/upload",
+        files={"file": ("test.png", io.BytesIO(_PNG_BYTES), "image/png")},
+    )
+    assert upload_resp.status_code == 201
+    image_id = upload_resp.json()["image_id"]
+
+    shared_db: DebugDatabaseService = integration_client.app.state._test_shared_db
+    shared_db.set_protected_url(
+        image_id=image_id,
+        protected_url=f"protected/{image_id}.png",
+        watermark_id="abcd1234abcd1234abcd1234abcd1234",
+    )
+
+    d1 = integration_client.post(f"/api/v1/images/{image_id}/downloaded")
+    assert d1.status_code == 200, d1.text
+    assert d1.json()["download_count"] == 1
+
+    d2 = integration_client.post(f"/api/v1/images/{image_id}/downloaded")
+    assert d2.status_code == 200, d2.text
+    assert d2.json()["download_count"] == 2
