@@ -20,6 +20,20 @@ _TABLE_TASKS: str = "tasks"
 logger: logging.Logger = logging.getLogger(__name__)
 
 
+def _coerce_download_count(value: object, fallback: int) -> int:
+    """Convert loose JSON values to an ``int`` download count."""
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return fallback
+    return fallback
+
+
 class DatabaseService:
     """Async-friendly wrapper around the Supabase Python SDK."""
 
@@ -171,7 +185,7 @@ class DatabaseService:
             .execute()
         )
         updated_row = dict(response.data[0])  # type: ignore[arg-type]
-        return int(updated_row.get("download_count", next_count))
+        return _coerce_download_count(updated_row.get("download_count"), next_count)
 
     # ------------------------------------------------------------------
     # images table – DELETE (soft)
