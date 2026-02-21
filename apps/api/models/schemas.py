@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 class ImageRecord(BaseModel):
     model_config = {"populate_by_name": True}
 
-    image_id: str = Field(alias="id")
+    image_id: str = Field(validation_alias="id")
     user_id: str
     original_url: str
     protected_url: str | None = None
