@@ -83,7 +83,7 @@ def test_get_image_after_upload_returns_pending(integration_client):
     assert get_resp.status_code == 200, f"Expected 200, got {get_resp.status_code}: {get_resp.text}"
     data = get_resp.json()
     assert data["status"] == "pending", f"Expected status 'pending', got '{data['status']}'"
-    assert data["id"] == image_id
+    assert data["image_id"] == image_id
 
 
 # ---------------------------------------------------------------------------
@@ -103,5 +103,5 @@ def test_list_images_contains_uploaded_image(integration_client):
     list_resp = integration_client.get("/api/v1/images/")
     assert list_resp.status_code == 200, f"Expected 200, got {list_resp.status_code}: {list_resp.text}"
     data = list_resp.json()
-    image_ids = [img["id"] for img in data["images"]]
+    image_ids = [img["image_id"] for img in data["images"]]
     assert image_id in image_ids, f"image_id {image_id} not found in image list: {image_ids}"
