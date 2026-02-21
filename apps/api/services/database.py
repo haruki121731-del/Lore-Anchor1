@@ -153,6 +153,26 @@ class DatabaseService:
         """Mark the image as ``failed``."""
         return self.update_status(image_id, "failed")
 
+    def set_pending(self, image_id: str) -> dict[str, Any]:
+        """Mark the image as ``pending``."""
+        return self.update_status(image_id, "pending")
+
+    def increment_download_count(self, image_id: str) -> int:
+        """Increment and return ``download_count`` for *image_id*."""
+        row = self.get_image(image_id)
+        if row is None:
+            raise KeyError(f"Image {image_id} not found")
+        current = int(row.get("download_count") or 0)
+        next_count = current + 1
+        response = (
+            self._client.table(_TABLE_IMAGES)
+            .update({"download_count": next_count})
+            .eq("id", image_id)
+            .execute()
+        )
+        updated_row = dict(response.data[0])  # type: ignore[arg-type]
+        return int(updated_row.get("download_count", next_count))
+
     # ------------------------------------------------------------------
     # images table – DELETE (soft)
     # ------------------------------------------------------------------
@@ -208,6 +228,7 @@ class DebugDatabaseService(DatabaseService):
             "protected_url": None,
             "watermark_id": watermark_id,
             "c2pa_manifest": None,
+            "download_count": 0,
             "status": "pending",
             "created_at": now,
             "updated_at": now,
@@ -275,6 +296,20 @@ class DebugDatabaseService(DatabaseService):
         if row:
             row["status"] = "deleted"
             logger.info("[DEBUG] DB soft-delete: image_id=%s", image_id)
+
+    def increment_download_count(self, image_id: str) -> int:
+        row = self._store.get(image_id)
+        if row is None:
+            raise KeyError(f"Image {image_id} not found in debug store")
+        current = int(row.get("download_count") or 0)
+        row["download_count"] = current + 1
+        row["updated_at"] = datetime.now(timezone.utc).isoformat()
+        logger.info(
+            "[DEBUG] DB increment download_count: image_id=%s -> %d",
+            image_id,
+            row["download_count"],
+        )
+        return int(row["download_count"])
 
     def get_task_by_image_id(self, image_id: str) -> dict[str, Any] | None:
         """Debug stub — always returns ``None`` (no tasks table)."""
