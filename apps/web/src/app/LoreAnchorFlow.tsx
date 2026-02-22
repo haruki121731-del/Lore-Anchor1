@@ -12,6 +12,7 @@ import {
 import type { JSX } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowRight, ImagePlus, Share2, ShieldCheck, Twitter } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { getImage, getTaskStatus, trackDownload, uploadImage } from "@/lib/api/images";
 import { getSupabaseClient } from "@/lib/supabase/client";
 
@@ -24,6 +25,11 @@ const PROCESSING_TIMEOUT_MS = 120000;
 
 type NavigatorWithCanShare = Navigator & {
   canShare?: (data?: ShareData) => boolean;
+};
+
+type EnsureSessionTokenOptions = {
+  forceRefresh?: boolean;
+  redirectIfMissing?: boolean;
 };
 
 function isAuthError(error: unknown): boolean {
@@ -40,6 +46,7 @@ function isAuthError(error: unknown): boolean {
 }
 
 export default function LoreAnchorFlow(): JSX.Element {
+  const router = useRouter();
   const [appState, setAppState] = useState<AppState>("landing");
   const [downloadLabel, setDownloadLabel] = useState("Download Protected Image");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -128,8 +135,14 @@ export default function LoreAnchorFlow(): JSX.Element {
     [clearDownloadLabelTimer, clearProcessingMonitors, replaceProtectedPreviewUrl, showToast]
   );
 
+  const redirectToLogin = useCallback((): void => {
+    const nextPath = "/?resumeUpload=1";
+    router.push(`/login?next=${encodeURIComponent(nextPath)}`);
+  }, [router]);
+
   const ensureSessionToken = useCallback(
-    async (forceRefresh: boolean = false): Promise<string | null> => {
+    async (options: EnsureSessionTokenOptions = {}): Promise<string | null> => {
+      const { forceRefresh = false, redirectIfMissing = false } = options;
       try {
         const supabase = getSupabaseClient();
         const {
@@ -137,7 +150,12 @@ export default function LoreAnchorFlow(): JSX.Element {
         } = await supabase.auth.getSession();
 
         if (!session) {
-          showToast("実加工にはログインが必要です。先に /login でログインしてください。", 3500);
+          if (redirectIfMissing) {
+            showToast("ログインが必要なためログイン画面へ移動します。", 2200);
+            redirectToLogin();
+          } else {
+            showToast("実加工にはログインが必要です。", 3000);
+          }
           return null;
         }
 
@@ -161,7 +179,7 @@ export default function LoreAnchorFlow(): JSX.Element {
         return null;
       }
     },
-    [showToast]
+    [redirectToLogin, showToast]
   );
 
   const startStatusPolling = useCallback(
@@ -185,7 +203,7 @@ export default function LoreAnchorFlow(): JSX.Element {
               throw error;
             }
 
-            const refreshed = await ensureSessionToken(true);
+            const refreshed = await ensureSessionToken({ forceRefresh: true });
             if (!refreshed) {
               resetToIdleWithError("セッションが切れました。再ログイン後に再試行してください。");
               return;
@@ -222,7 +240,7 @@ export default function LoreAnchorFlow(): JSX.Element {
               throw error;
             }
 
-            const refreshed = await ensureSessionToken(true);
+            const refreshed = await ensureSessionToken({ forceRefresh: true });
             if (!refreshed) {
               resetToIdleWithError("セッションが切れました。再ログイン後に再試行してください。");
               return;
@@ -306,7 +324,7 @@ export default function LoreAnchorFlow(): JSX.Element {
         return;
       }
 
-      const token = await ensureSessionToken();
+      const token = await ensureSessionToken({ redirectIfMissing: true });
       if (!token) {
         return;
       }
@@ -341,7 +359,7 @@ export default function LoreAnchorFlow(): JSX.Element {
             throw error;
           }
 
-          const refreshed = await ensureSessionToken(true);
+          const refreshed = await ensureSessionToken({ forceRefresh: true });
           if (!refreshed) {
             resetToIdleWithError("セッションが切れました。再ログイン後に再試行してください。");
             return;
@@ -377,6 +395,24 @@ export default function LoreAnchorFlow(): JSX.Element {
     ]
   );
 
+  const moveToIdleAfterLogin = useCallback(async (): Promise<void> => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("resumeUpload") !== "1") {
+      return;
+    }
+
+    setAppState("idle");
+    const token = await ensureSessionToken();
+    if (token) {
+      setSessionToken(token);
+      showToast("ログインが完了しました。画像を選択してください。", 2600);
+    }
+
+    params.delete("resumeUpload");
+    const nextQuery = params.toString();
+    router.replace(nextQuery ? `/?${nextQuery}` : "/");
+  }, [ensureSessionToken, router, showToast]);
+
   const getProtectedBlobOrNotify = useCallback((): Blob | null => {
     if (!protectedImageBlob) {
       showToast("保護画像の準備が完了していません。", 3000);
@@ -406,8 +442,19 @@ export default function LoreAnchorFlow(): JSX.Element {
   );
 
   const handleDropzoneClick = useCallback((): void => {
-    fileInputRef.current?.click();
-  }, []);
+    void (async () => {
+      const token = sessionToken ?? (await ensureSessionToken({ redirectIfMissing: true }));
+      if (!token) {
+        return;
+      }
+
+      if (!sessionToken) {
+        setSessionToken(token);
+      }
+
+      fileInputRef.current?.click();
+    })();
+  }, [ensureSessionToken, sessionToken]);
 
   const handleDragOver = useCallback((event: DragEvent<HTMLDivElement>): void => {
     event.preventDefault();
@@ -538,6 +585,10 @@ export default function LoreAnchorFlow(): JSX.Element {
       showToast("X共有の準備に失敗しました。", 4000);
     }
   }, [copyImageToClipboard, getProtectedBlobOrNotify, showToast]);
+
+  useEffect(() => {
+    void moveToIdleAfterLogin();
+  }, [moveToIdleAfterLogin]);
 
   useEffect(() => {
     selectedPreviewUrlRef.current = selectedPreviewUrl;
