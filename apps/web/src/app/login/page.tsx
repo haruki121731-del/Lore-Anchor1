@@ -65,6 +65,15 @@ function mapSupabaseError(messageText: string): string {
   return "認証に失敗しました。時間をおいて再度お試しください。";
 }
 
+function sanitizeNextPath(nextRaw: string | null): string {
+  if (!nextRaw) return "/dashboard";
+  if (!nextRaw.startsWith("/")) return "/dashboard";
+  if (nextRaw.startsWith("//")) return "/dashboard";
+  if (nextRaw === "/login" || nextRaw.startsWith("/login?")) return "/dashboard";
+  if (nextRaw === "/auth/callback" || nextRaw.startsWith("/auth/callback?")) return "/dashboard";
+  return nextRaw;
+}
+
 function joinIssues(issues: RedirectIssue[]): string {
   return issues.map((issue) => issue.message).join(" ");
 }
@@ -75,6 +84,7 @@ function LoginPageContent() {
     searchParams.get("error"),
     searchParams.get("error_description")
   );
+  const nextPath = useMemo(() => sanitizeNextPath(searchParams.get("next")), [searchParams]);
 
   const [email, setEmail] = useState("");
   const [loadingEmail, setLoadingEmail] = useState(false);
@@ -144,7 +154,14 @@ function LoginPageContent() {
       );
       return null;
     }
-    return currentResolution.redirectTo;
+
+    try {
+      const callbackUrl = new URL(currentResolution.redirectTo);
+      callbackUrl.searchParams.set("next", nextPath);
+      return callbackUrl.toString();
+    } catch {
+      return currentResolution.redirectTo;
+    }
   }
 
   async function handleEmailLogin(e: React.FormEvent) {
