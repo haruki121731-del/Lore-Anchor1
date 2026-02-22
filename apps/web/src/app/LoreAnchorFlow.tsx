@@ -27,6 +27,19 @@ type NavigatorWithCanShare = Navigator & {
   canShare?: (data?: ShareData) => boolean;
 };
 
+function isAuthError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("401") ||
+    message.includes("missing bearer token") ||
+    message.includes("invalid or expired token")
+  );
+}
+
 export default function LoreAnchorFlow(): JSX.Element {
   const router = useRouter();
 
@@ -122,6 +135,23 @@ export default function LoreAnchorFlow(): JSX.Element {
     [clearDownloadLabelTimer, clearPollingMonitors, replaceProtectedPreviewUrl, showToast]
   );
 
+  const redirectToLoginWithMessage = useCallback(
+    async (message: string): Promise<void> => {
+      resetToIdleWithError(message);
+      setSessionToken(null);
+      try {
+        const supabase = getSupabaseClient();
+        await supabase.auth.signOut();
+      } catch {
+        // Ignore sign-out errors and continue redirect.
+      }
+      window.setTimeout(() => {
+        router.push("/login");
+      }, 250);
+    },
+    [resetToIdleWithError, router]
+  );
+
   const getProtectedBlobOrNotify = useCallback((): Blob | null => {
     if (!protectedImageBlob) {
       showToast("保護画像の準備が完了していません。", 3000);
@@ -200,8 +230,12 @@ export default function LoreAnchorFlow(): JSX.Element {
           setProtectedImageBlob(finalBlob);
           setProcessingError(null);
           setAppState("success");
-        } catch {
+        } catch (error) {
           if (runId !== processingRunRef.current) {
+            return;
+          }
+          if (isAuthError(error)) {
+            void redirectToLoginWithMessage("セッションが切れました。再ログインしてください。");
             return;
           }
           resetToIdleWithError("処理状況の取得に失敗しました。再度アップロードしてください。");
@@ -223,22 +257,44 @@ export default function LoreAnchorFlow(): JSX.Element {
 
       void pollStatus();
     },
-    [clearPollingMonitors, replaceProtectedPreviewUrl, resetToIdleWithError, showToast]
+    [
+      clearPollingMonitors,
+      redirectToLoginWithMessage,
+      replaceProtectedPreviewUrl,
+      resetToIdleWithError,
+      showToast,
+    ]
   );
 
-  const ensureSessionToken = useCallback(async (): Promise<string | null> => {
+  const ensureSessionToken = useCallback(async (forceRefresh: boolean = false): Promise<string | null> => {
     try {
       const supabase = getSupabaseClient();
       const {
         data: { session },
       } = await supabase.auth.getSession();
 
-      if (!session?.access_token) {
+      if (!session) {
         showToast("ログインが必要です。ログイン画面へ移動します。", 2200);
         window.setTimeout(() => {
           router.push("/login");
         }, 250);
         return null;
+      }
+
+      const nowInSeconds = Math.floor(Date.now() / 1000);
+      const expiresSoon = typeof session.expires_at === "number" && session.expires_at <= nowInSeconds + 60;
+      const shouldRefresh = forceRefresh || !session.access_token || expiresSoon;
+
+      if (shouldRefresh) {
+        const { data, error } = await supabase.auth.refreshSession();
+        if (error || !data.session?.access_token) {
+          showToast("セッション更新に失敗しました。再ログインしてください。", 2200);
+          window.setTimeout(() => {
+            router.push("/login");
+          }, 250);
+          return null;
+        }
+        return data.session.access_token;
       }
 
       return session.access_token;
@@ -267,6 +323,7 @@ export default function LoreAnchorFlow(): JSX.Element {
       if (!token) {
         return;
       }
+      let activeToken = token;
 
       const runId = processingRunRef.current + 1;
       processingRunRef.current = runId;
@@ -291,15 +348,41 @@ export default function LoreAnchorFlow(): JSX.Element {
       setAppState("processing");
 
       try {
-        const uploadResult = await uploadImage(file, token);
+        let uploadResult;
+        try {
+          uploadResult = await uploadImage(file, activeToken);
+        } catch (error) {
+          if (!isAuthError(error)) {
+            throw error;
+          }
+
+          const refreshedToken = await ensureSessionToken(true);
+          if (!refreshedToken) {
+            await redirectToLoginWithMessage("セッションが切れました。再ログインしてください。");
+            return;
+          }
+
+          if (runId !== processingRunRef.current) {
+            return;
+          }
+
+          activeToken = refreshedToken;
+          setSessionToken(refreshedToken);
+          uploadResult = await uploadImage(file, activeToken);
+        }
+
         if (runId !== processingRunRef.current) {
           return;
         }
 
         setCurrentImageId(uploadResult.image_id);
-        startStatusPolling(uploadResult.image_id, token, file, runId);
-      } catch {
+        startStatusPolling(uploadResult.image_id, activeToken, file, runId);
+      } catch (error) {
         if (runId !== processingRunRef.current) {
+          return;
+        }
+        if (isAuthError(error)) {
+          await redirectToLoginWithMessage("セッションが切れました。再ログインしてください。");
           return;
         }
         resetToIdleWithError("アップロードに失敗しました。再度アップロードしてください。");
@@ -309,6 +392,7 @@ export default function LoreAnchorFlow(): JSX.Element {
       clearDownloadLabelTimer,
       clearPollingMonitors,
       ensureSessionToken,
+      redirectToLoginWithMessage,
       replaceProtectedPreviewUrl,
       replaceSelectedPreviewUrl,
       resetToIdleWithError,
@@ -492,18 +576,20 @@ export default function LoreAnchorFlow(): JSX.Element {
         {appState === "landing" && (
           <motion.div
             key="landing"
-            className="flex flex-col items-center justify-center w-full max-w-[800px] text-center"
+            className="flex flex-col items-center justify-center w-full max-w-[920px] text-center"
             exit={{ opacity: 0, y: -24, filter: "blur(8px)" }}
             transition={{ duration: 0.4, ease: [0.32, 0.72, 0, 1] }}
           >
             <span className="text-[11px] font-bold tracking-[0.25em] text-[#0D9488] mb-[24px]">
               PRIVATE BETA
             </span>
-            <h1 className="text-[40px] md:text-[64px] font-[800] leading-[1.1] tracking-[-0.02em] text-[#111827] mb-[24px]">
-              画像を守る。権利を証明する。
+            <h1 className="text-[40px] md:text-[72px] font-[800] leading-[1.06] tracking-[-0.03em] text-[#111827] mb-[24px]">
+              <span className="block">画像を守る。</span>
+              <span className="block">権利を証明する。</span>
             </h1>
-            <p className="text-[16px] md:text-[18px] font-normal leading-[1.6] text-[#6B7280] max-w-[540px] mb-[40px]">
-              複雑な技術はすべて裏側へ。あなたの作品をワンクリックでAIの無断学習から保護します。
+            <p className="text-[16px] md:text-[20px] font-normal leading-[1.65] text-[#6B7280] max-w-[620px] mb-[40px]">
+              <span className="block">複雑な技術はすべて裏側へ。</span>
+              <span className="block">あなたの作品をワンクリックでAIの無断学習から保護します。</span>
             </p>
             <motion.button
               type="button"
