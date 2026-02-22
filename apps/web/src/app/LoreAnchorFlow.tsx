@@ -1,7 +1,6 @@
 "use client";
 
 import Image from "next/image";
-import { useRouter } from "next/navigation";
 import {
   useCallback,
   useEffect,
@@ -13,35 +12,44 @@ import {
 import type { JSX } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowRight, ImagePlus, Share2, ShieldCheck, Twitter } from "lucide-react";
-import { getSupabaseClient } from "@/lib/supabase/client";
 import { getImage, getTaskStatus, trackDownload, uploadImage } from "@/lib/api/images";
+import { getSupabaseClient } from "@/lib/supabase/client";
 
 export type AppState = "landing" | "idle" | "processing" | "success";
 
 const ALLOWED_CONTENT_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
-const POLLING_INTERVAL_MS = 2000;
+const POLL_INTERVAL_MS = 2000;
 const PROCESSING_TIMEOUT_MS = 120000;
 
 type NavigatorWithCanShare = Navigator & {
   canShare?: (data?: ShareData) => boolean;
 };
 
-export default function LoreAnchorFlow(): JSX.Element {
-  const router = useRouter();
+function isAuthError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
 
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("401") ||
+    message.includes("missing bearer token") ||
+    message.includes("invalid or expired token")
+  );
+}
+
+export default function LoreAnchorFlow(): JSX.Element {
   const [appState, setAppState] = useState<AppState>("landing");
   const [downloadLabel, setDownloadLabel] = useState("Download Protected Image");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [selectedPreviewUrl, setSelectedPreviewUrl] = useState<string | null>(null);
-  const [protectedImageUrl, setProtectedImageUrl] = useState<string | null>(null);
   const [protectedPreviewUrl, setProtectedPreviewUrl] = useState<string | null>(null);
+  const [protectedDownloadUrl, setProtectedDownloadUrl] = useState<string | null>(null);
   const [protectedImageBlob, setProtectedImageBlob] = useState<Blob | null>(null);
+  const [originalFileName, setOriginalFileName] = useState("my_art");
   const [currentImageId, setCurrentImageId] = useState<string | null>(null);
   const [sessionToken, setSessionToken] = useState<string | null>(null);
-  const [processingError, setProcessingError] = useState<string | null>(null);
-  const [originalFileName, setOriginalFileName] = useState("my_art");
   const [isDragActive, setIsDragActive] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -66,7 +74,7 @@ export default function LoreAnchorFlow(): JSX.Element {
     }, durationMs);
   }, []);
 
-  const clearPollingMonitors = useCallback((): void => {
+  const clearProcessingMonitors = useCallback((): void => {
     if (pollingIntervalRef.current !== null) {
       window.clearInterval(pollingIntervalRef.current);
       pollingIntervalRef.current = null;
@@ -106,43 +114,61 @@ export default function LoreAnchorFlow(): JSX.Element {
   const resetToIdleWithError = useCallback(
     (message: string): void => {
       processingRunRef.current += 1;
-      clearPollingMonitors();
+      clearProcessingMonitors();
       clearDownloadLabelTimer();
 
       setAppState("idle");
-      setDownloadLabel("Download Protected Image");
       setCurrentImageId(null);
-      setProtectedImageUrl(null);
-      replaceProtectedPreviewUrl(null);
+      setProtectedDownloadUrl(null);
       setProtectedImageBlob(null);
-      setProcessingError(message);
+      replaceProtectedPreviewUrl(null);
 
-      showToast(message, 3000);
+      showToast(message, 3200);
     },
-    [clearDownloadLabelTimer, clearPollingMonitors, replaceProtectedPreviewUrl, showToast]
+    [clearDownloadLabelTimer, clearProcessingMonitors, replaceProtectedPreviewUrl, showToast]
   );
 
-  const getProtectedBlobOrNotify = useCallback((): Blob | null => {
-    if (!protectedImageBlob) {
-      showToast("保護画像の準備が完了していません。", 3000);
-      return null;
-    }
-    return protectedImageBlob;
-  }, [protectedImageBlob, showToast]);
+  const ensureSessionToken = useCallback(
+    async (forceRefresh: boolean = false): Promise<string | null> => {
+      try {
+        const supabase = getSupabaseClient();
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
 
-  const copyImageToClipboard = useCallback(async (blob: Blob): Promise<void> => {
-    if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) {
-      throw new Error("Clipboard API is unavailable");
-    }
+        if (!session) {
+          showToast("実加工にはログインが必要です。先に /login でログインしてください。", 3500);
+          return null;
+        }
 
-    const item = new ClipboardItem({ "image/png": blob });
-    await navigator.clipboard.write([item]);
-  }, []);
+        const nowInSeconds = Math.floor(Date.now() / 1000);
+        const expiresSoon =
+          typeof session.expires_at === "number" && session.expires_at <= nowInSeconds + 60;
+        const shouldRefresh = forceRefresh || !session.access_token || expiresSoon;
+
+        if (shouldRefresh) {
+          const { data, error } = await supabase.auth.refreshSession();
+          if (error || !data.session?.access_token) {
+            showToast("セッション更新に失敗しました。再ログインしてください。", 3500);
+            return null;
+          }
+          return data.session.access_token;
+        }
+
+        return session.access_token;
+      } catch {
+        showToast("ログイン状態の確認に失敗しました。", 3000);
+        return null;
+      }
+    },
+    [showToast]
+  );
 
   const startStatusPolling = useCallback(
-    (imageId: string, token: string, fallbackBlob: Blob, runId: number): void => {
-      clearPollingMonitors();
+    (imageId: string, initialToken: string, fallbackBlob: Blob, runId: number): void => {
+      clearProcessingMonitors();
       let inFlight = false;
+      let activeToken = initialToken;
 
       const pollStatus = async (): Promise<void> => {
         if (inFlight || runId !== processingRunRef.current) {
@@ -151,31 +177,67 @@ export default function LoreAnchorFlow(): JSX.Element {
 
         inFlight = true;
         try {
-          const task = await getTaskStatus(imageId, token);
+          let taskStatus;
+          try {
+            taskStatus = await getTaskStatus(imageId, activeToken);
+          } catch (error) {
+            if (!isAuthError(error)) {
+              throw error;
+            }
+
+            const refreshed = await ensureSessionToken(true);
+            if (!refreshed) {
+              resetToIdleWithError("セッションが切れました。再ログイン後に再試行してください。");
+              return;
+            }
+
+            activeToken = refreshed;
+            setSessionToken(refreshed);
+            taskStatus = await getTaskStatus(imageId, activeToken);
+          }
+
           if (runId !== processingRunRef.current) {
             return;
           }
 
-          if (task.status === "failed") {
-            const message = task.error_log
-              ? `画像の保護処理に失敗しました: ${task.error_log}`
-              : "画像の保護処理に失敗しました。再度アップロードしてください。";
+          if (taskStatus.status === "failed") {
+            const message = taskStatus.error_log
+              ? `画像の保護処理に失敗しました: ${taskStatus.error_log}`
+              : "画像の保護処理に失敗しました。再アップロードしてください。";
             resetToIdleWithError(message);
             return;
           }
 
-          if (task.status !== "completed") {
+          if (taskStatus.status !== "completed") {
             return;
           }
 
-          clearPollingMonitors();
+          clearProcessingMonitors();
 
-          const image = await getImage(imageId, token);
+          let image;
+          try {
+            image = await getImage(imageId, activeToken);
+          } catch (error) {
+            if (!isAuthError(error)) {
+              throw error;
+            }
+
+            const refreshed = await ensureSessionToken(true);
+            if (!refreshed) {
+              resetToIdleWithError("セッションが切れました。再ログイン後に再試行してください。");
+              return;
+            }
+
+            activeToken = refreshed;
+            setSessionToken(refreshed);
+            image = await getImage(imageId, activeToken);
+          }
+
           if (runId !== processingRunRef.current) {
             return;
           }
 
-          setProtectedImageUrl(image.protected_url ?? null);
+          setProtectedDownloadUrl(image.protected_url ?? null);
 
           let finalBlob = fallbackBlob;
           if (image.protected_url) {
@@ -195,16 +257,16 @@ export default function LoreAnchorFlow(): JSX.Element {
             return;
           }
 
-          const previewUrl = URL.createObjectURL(finalBlob);
-          replaceProtectedPreviewUrl(previewUrl);
+          const successPreviewUrl = URL.createObjectURL(finalBlob);
+          replaceProtectedPreviewUrl(successPreviewUrl);
           setProtectedImageBlob(finalBlob);
-          setProcessingError(null);
+          setSessionToken(activeToken);
           setAppState("success");
         } catch {
           if (runId !== processingRunRef.current) {
             return;
           }
-          resetToIdleWithError("処理状況の取得に失敗しました。再度アップロードしてください。");
+          resetToIdleWithError("処理状況の取得に失敗しました。再アップロードしてください。");
         } finally {
           inFlight = false;
         }
@@ -212,44 +274,25 @@ export default function LoreAnchorFlow(): JSX.Element {
 
       pollingIntervalRef.current = window.setInterval(() => {
         void pollStatus();
-      }, POLLING_INTERVAL_MS);
+      }, POLL_INTERVAL_MS);
 
       processingTimeoutRef.current = window.setTimeout(() => {
         if (runId !== processingRunRef.current) {
           return;
         }
-        resetToIdleWithError("処理がタイムアウトしました。再度アップロードしてください。");
+        resetToIdleWithError("処理がタイムアウトしました。再アップロードしてください。");
       }, PROCESSING_TIMEOUT_MS);
 
       void pollStatus();
     },
-    [clearPollingMonitors, replaceProtectedPreviewUrl, resetToIdleWithError, showToast]
+    [
+      clearProcessingMonitors,
+      ensureSessionToken,
+      replaceProtectedPreviewUrl,
+      resetToIdleWithError,
+      showToast,
+    ]
   );
-
-  const ensureSessionToken = useCallback(async (): Promise<string | null> => {
-    try {
-      const supabase = getSupabaseClient();
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session?.access_token) {
-        showToast("ログインが必要です。ログイン画面へ移動します。", 2200);
-        window.setTimeout(() => {
-          router.push("/login");
-        }, 250);
-        return null;
-      }
-
-      return session.access_token;
-    } catch {
-      showToast("ログイン状態を確認できませんでした。", 2200);
-      window.setTimeout(() => {
-        router.push("/login");
-      }, 250);
-      return null;
-    }
-  }, [router, showToast]);
 
   const handleSelectedFile = useCallback(
     async (file: File): Promise<void> => {
@@ -268,46 +311,63 @@ export default function LoreAnchorFlow(): JSX.Element {
         return;
       }
 
-      const runId = processingRunRef.current + 1;
-      processingRunRef.current = runId;
+      processingRunRef.current += 1;
+      const runId = processingRunRef.current;
 
-      clearPollingMonitors();
+      clearProcessingMonitors();
       clearDownloadLabelTimer();
+
+      const processingPreviewUrl = URL.createObjectURL(file);
+      replaceSelectedPreviewUrl(processingPreviewUrl);
       replaceProtectedPreviewUrl(null);
 
-      const previewUrl = URL.createObjectURL(file);
-      replaceSelectedPreviewUrl(previewUrl);
-
       const baseName = file.name.replace(/\.[^/.]+$/, "").trim();
-
-      setSelectedFile(file);
-      setSessionToken(token);
       setOriginalFileName(baseName || "my_art");
       setDownloadLabel("Download Protected Image");
-      setCurrentImageId(null);
-      setProtectedImageUrl(null);
       setProtectedImageBlob(file);
-      setProcessingError(null);
+      setProtectedDownloadUrl(null);
+      setCurrentImageId(null);
+      setSessionToken(token);
       setAppState("processing");
 
+      let activeToken = token;
+
       try {
-        const uploadResult = await uploadImage(file, token);
+        let uploadResult;
+        try {
+          uploadResult = await uploadImage(file, activeToken);
+        } catch (error) {
+          if (!isAuthError(error)) {
+            throw error;
+          }
+
+          const refreshed = await ensureSessionToken(true);
+          if (!refreshed) {
+            resetToIdleWithError("セッションが切れました。再ログイン後に再試行してください。");
+            return;
+          }
+
+          activeToken = refreshed;
+          setSessionToken(refreshed);
+          uploadResult = await uploadImage(file, activeToken);
+        }
+
         if (runId !== processingRunRef.current) {
           return;
         }
 
         setCurrentImageId(uploadResult.image_id);
-        startStatusPolling(uploadResult.image_id, token, file, runId);
+        startStatusPolling(uploadResult.image_id, activeToken, file, runId);
       } catch {
         if (runId !== processingRunRef.current) {
           return;
         }
-        resetToIdleWithError("アップロードに失敗しました。再度アップロードしてください。");
+        resetToIdleWithError("アップロードに失敗しました。再アップロードしてください。");
       }
     },
     [
       clearDownloadLabelTimer,
-      clearPollingMonitors,
+      clearProcessingMonitors,
       ensureSessionToken,
       replaceProtectedPreviewUrl,
       replaceSelectedPreviewUrl,
@@ -316,6 +376,23 @@ export default function LoreAnchorFlow(): JSX.Element {
       startStatusPolling,
     ]
   );
+
+  const getProtectedBlobOrNotify = useCallback((): Blob | null => {
+    if (!protectedImageBlob) {
+      showToast("保護画像の準備が完了していません。", 3000);
+      return null;
+    }
+    return protectedImageBlob;
+  }, [protectedImageBlob, showToast]);
+
+  const copyImageToClipboard = useCallback(async (blob: Blob): Promise<void> => {
+    if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) {
+      throw new Error("Clipboard API is unavailable");
+    }
+
+    const item = new ClipboardItem({ "image/png": blob });
+    await navigator.clipboard.write([item]);
+  }, []);
 
   const handleFileInputChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>): void => {
@@ -392,13 +469,22 @@ export default function LoreAnchorFlow(): JSX.Element {
         }
       }
     } catch {
-      showToast("ダウンロードに失敗しました。", 3000);
+      if (protectedDownloadUrl) {
+        const anchor = document.createElement("a");
+        anchor.href = protectedDownloadUrl;
+        anchor.target = "_blank";
+        anchor.rel = "noopener noreferrer";
+        anchor.click();
+      } else {
+        showToast("ダウンロードに失敗しました。", 3000);
+      }
     }
   }, [
     clearDownloadLabelTimer,
     currentImageId,
     getProtectedBlobOrNotify,
     originalFileName,
+    protectedDownloadUrl,
     sessionToken,
     showToast,
   ]);
@@ -464,7 +550,7 @@ export default function LoreAnchorFlow(): JSX.Element {
   useEffect(() => {
     return () => {
       processingRunRef.current += 1;
-      clearPollingMonitors();
+      clearProcessingMonitors();
       clearDownloadLabelTimer();
 
       if (toastTimerRef.current !== null) {
@@ -481,7 +567,7 @@ export default function LoreAnchorFlow(): JSX.Element {
         URL.revokeObjectURL(protectedUrl);
       }
     };
-  }, [clearDownloadLabelTimer, clearPollingMonitors]);
+  }, [clearDownloadLabelTimer, clearProcessingMonitors]);
 
   const processingImageSrc = selectedPreviewUrl;
   const successImageSrc = protectedPreviewUrl ?? selectedPreviewUrl;
@@ -492,18 +578,20 @@ export default function LoreAnchorFlow(): JSX.Element {
         {appState === "landing" && (
           <motion.div
             key="landing"
-            className="flex flex-col items-center justify-center w-full max-w-[800px] text-center"
+            className="flex flex-col items-center justify-center w-full max-w-[920px] text-center"
             exit={{ opacity: 0, y: -24, filter: "blur(8px)" }}
             transition={{ duration: 0.4, ease: [0.32, 0.72, 0, 1] }}
           >
             <span className="text-[11px] font-bold tracking-[0.25em] text-[#0D9488] mb-[24px]">
               PRIVATE BETA
             </span>
-            <h1 className="text-[40px] md:text-[64px] font-[800] leading-[1.1] tracking-[-0.02em] text-[#111827] mb-[24px]">
-              画像を守る。権利を証明する。
+            <h1 className="text-[40px] md:text-[72px] font-[800] leading-[1.06] tracking-[-0.03em] text-[#111827] mb-[24px]">
+              <span className="block">画像を守る。</span>
+              <span className="block">権利を証明する。</span>
             </h1>
-            <p className="text-[16px] md:text-[18px] font-normal leading-[1.6] text-[#6B7280] max-w-[540px] mb-[40px]">
-              複雑な技術はすべて裏側へ。あなたの作品をワンクリックでAIの無断学習から保護します。
+            <p className="text-[16px] md:text-[20px] font-normal leading-[1.65] text-[#6B7280] max-w-[620px] mb-[40px]">
+              <span className="block">複雑な技術はすべて裏側へ。</span>
+              <span className="block">あなたの作品をワンクリックでAIの無断学習から保護します。</span>
             </p>
             <motion.button
               type="button"
@@ -642,16 +730,6 @@ export default function LoreAnchorFlow(): JSX.Element {
           </motion.div>
         )}
       </AnimatePresence>
-
-      <span className="sr-only" aria-live="polite">
-        {processingError ?? ""}
-      </span>
-      <span className="sr-only">
-        {selectedFile?.name ?? ""}
-      </span>
-      <span className="sr-only">
-        {protectedImageUrl ?? ""}
-      </span>
 
       <AnimatePresence>
         {toastMessage && (
