@@ -15,6 +15,7 @@ import { ArrowRight, ImagePlus, Share2, ShieldCheck, Twitter } from "lucide-reac
 import { useRouter } from "next/navigation";
 import { getImage, getTaskStatus, trackDownload, uploadImage } from "@/lib/api/images";
 import { getSupabaseClient } from "@/lib/supabase/client";
+import PricingSection from "@/components/pricing-section";
 
 export type AppState = "landing" | "idle" | "processing" | "success";
 
@@ -624,36 +625,39 @@ export default function LoreAnchorFlow(): JSX.Element {
   const successImageSrc = protectedPreviewUrl ?? selectedPreviewUrl;
 
   return (
-    <main className="flex flex-col items-center justify-center min-h-screen w-full px-[16px] overflow-hidden relative bg-gradient-to-b from-[#F8FAFC] to-[#FFFFFF] font-sans">
+    <main className="flex flex-col items-center w-full px-[16px] overflow-hidden relative bg-gradient-to-b from-[#F8FAFC] to-[#FFFFFF] font-sans">
       <AnimatePresence mode="wait">
         {appState === "landing" && (
           <motion.div
             key="landing"
-            className="flex flex-col items-center justify-center w-full max-w-[920px] text-center"
+            className="flex flex-col items-center w-full"
             exit={{ opacity: 0, y: -24, filter: "blur(8px)" }}
             transition={{ duration: 0.4, ease: [0.32, 0.72, 0, 1] }}
           >
-            <span className="text-[11px] font-bold tracking-[0.25em] text-[#0D9488] mb-[24px]">
-              PRIVATE BETA
-            </span>
-            <h1 className="text-[40px] md:text-[72px] font-[800] leading-[1.06] tracking-[-0.03em] text-[#111827] mb-[24px]">
-              <span className="block">画像を守る。</span>
-              <span className="block">権利を証明する。</span>
-            </h1>
-            <p className="text-[16px] md:text-[20px] font-normal leading-[1.65] text-[#6B7280] max-w-[620px] mb-[40px]">
-              <span className="block">複雑な技術はすべて裏側へ。</span>
-              <span className="block">あなたの作品をワンクリックでAIの無断学習から保護します。</span>
-            </p>
-            <motion.button
-              type="button"
-              whileHover={{ scale: 1.04, boxShadow: "0 12px 32px rgba(0,0,0,0.16)" }}
-              whileTap={{ scale: 0.96 }}
-              className="h-[64px] px-[40px] rounded-[32px] bg-[#000000] text-[#FFFFFF] shadow-[0_8px_24px_rgba(0,0,0,0.12)] flex items-center justify-center gap-[12px]"
-              onClick={() => setAppState("idle")}
-            >
-              <span className="text-[18px] font-bold tracking-[-0.01em]">今すぐ保護をはじめる</span>
-              <ArrowRight size={24} strokeWidth={2.5} color="#FFFFFF" />
-            </motion.button>
+            <div className="flex flex-col items-center justify-center min-h-screen w-full max-w-[920px] text-center">
+              <span className="text-[11px] font-bold tracking-[0.25em] text-[#0D9488] mb-[24px]">
+                PRIVATE BETA
+              </span>
+              <h1 className="text-[40px] md:text-[72px] font-[800] leading-[1.06] tracking-[-0.03em] text-[#111827] mb-[24px]">
+                <span className="block">画像を守る。</span>
+                <span className="block">権利を証明する。</span>
+              </h1>
+              <p className="text-[16px] md:text-[20px] font-normal leading-[1.65] text-[#6B7280] max-w-[620px] mb-[40px]">
+                <span className="block">複雑な技術はすべて裏側へ。</span>
+                <span className="block">あなたの作品をワンクリックでAIの無断学習から保護します。</span>
+              </p>
+              <motion.button
+                type="button"
+                whileHover={{ scale: 1.04, boxShadow: "0 12px 32px rgba(0,0,0,0.16)" }}
+                whileTap={{ scale: 0.96 }}
+                className="h-[64px] px-[40px] rounded-[32px] bg-[#000000] text-[#FFFFFF] shadow-[0_8px_24px_rgba(0,0,0,0.12)] flex items-center justify-center gap-[12px]"
+                onClick={() => setAppState("idle")}
+              >
+                <span className="text-[18px] font-bold tracking-[-0.01em]">今すぐ保護をはじめる</span>
+                <ArrowRight size={24} strokeWidth={2.5} color="#FFFFFF" />
+              </motion.button>
+            </div>
+            <PricingSection />
           </motion.div>
         )}
 
@@ -663,7 +667,7 @@ export default function LoreAnchorFlow(): JSX.Element {
             initial={{ opacity: 0, y: 32, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-            className="w-full max-w-[720px] aspect-[4/3] md:aspect-[16/10]"
+            className="w-full max-w-[720px] aspect-[4/3] md:aspect-[16/10] mt-[25vh]"
           >
             <input
               ref={fileInputRef}
@@ -694,7 +698,7 @@ export default function LoreAnchorFlow(): JSX.Element {
         )}
 
         {appState === "processing" && (
-          <motion.div key="processing" className="w-full flex flex-col items-center">
+          <motion.div key="processing" className="w-full flex flex-col items-center mt-[20vh]">
             <div className="w-full max-w-[720px] aspect-[4/3] md:aspect-[16/10]">
               <div className="w-full h-full rounded-[24px] bg-[#000000] overflow-hidden shadow-[0_24px_48px_rgba(0,0,0,0.2)] relative flex flex-col items-center justify-center">
                 {processingImageSrc && (
@@ -720,7 +724,7 @@ export default function LoreAnchorFlow(): JSX.Element {
         )}
 
         {appState === "success" && (
-          <motion.div key="success" className="w-full flex flex-col items-center">
+          <motion.div key="success" className="w-full flex flex-col items-center mt-[15vh]">
             <div className="w-full max-w-[720px] aspect-[4/3] md:aspect-[16/10]">
               <div className="w-full h-full rounded-[24px] bg-[#000000] overflow-hidden shadow-[0_24px_48px_rgba(0,0,0,0.2)] relative flex flex-col items-center justify-center">
                 {successImageSrc && (
