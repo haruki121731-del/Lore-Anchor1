@@ -41,12 +41,28 @@ jobs:
             echo "❌ Waitlist site down (HTTP $STATUS)"
           fi
       
+      - name: Check Frontend app
+        id: frontend
+        run: |
+          STATUS=$(curl -s --max-time 10 -o /dev/null -w "%{http_code}" \
+            https://lore-anchor.vercel.app)
+          if [ "$STATUS" = "200" ]; then
+            echo "ok=true" >> $GITHUB_OUTPUT
+            echo "✅ Frontend healthy"
+          else
+            echo "ok=false" >> $GITHUB_OUTPUT
+            echo "❌ Frontend down (HTTP $STATUS)"
+          fi
+      
       - name: Summarize issues
         id: summary
         run: |
           ISSUES=""
           if [ "${{ steps.api.outputs.ok }}" != "true" ]; then
             ISSUES="API_DOWN"
+          fi
+          if [ "${{ steps.frontend.outputs.ok }}" != "true" ]; then
+            ISSUES="${ISSUES:+$ISSUES,}FRONTEND_DOWN"
           fi
           if [ "${{ steps.waitlist.outputs.ok }}" != "true" ]; then
             ISSUES="${ISSUES} WAITLIST_DOWN"
