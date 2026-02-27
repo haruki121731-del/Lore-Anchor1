@@ -1,0 +1,40 @@
+{
+  "_comment": "Rules for classifying GitHub issues into complexity tiers for LLM routing",
+  "simple_keywords": [
+    "test", "spec", "typo", "rename", "format", "lint", "docstring",
+    "comment", "readme", "console.log", "print(", "type hint",
+    "add import", "missing import", "boilerplate", "scaffold", "skeleton",
+    "fix spelling", "whitespace", "trailing comma", "semicolon", "placeholder",
+    "translation", "i18n", "string", "label", "tooltip", "aria-label",
+    "css", "style", "margin", "padding", "color", "font",
+    "simple bug", "null check", "undefined check", "missing return"
+  ],
+  "complex_keywords": [
+    "architecture", "security", "vulnerability", "auth", "jwt", "oauth",
+    "race condition", "deadlock", "migration", "database schema",
+    "api design", "caching strategy", "performance bottleneck",
+    "refactor entire", "redesign", "c2pa", "cryptography", "signature",
+    "distributed", "concurrency", "webhook security", "cors policy",
+    "mist", "adversarial", "watermark", "pixelseal", "steganography",
+    "saladcloud", "gpu", "worker", "queue", "redis", "rate limit",
+    "payment", "billing", "stripe", "supabase rls", "row level security"
+  ],
+  "label_overrides": {
+    "simple": ["quick-fix", "typo", "docs", "simple", "good-first-issue", "chore"],
+    "complex": ["architecture", "security", "complex", "breaking-change", "needs-discussion"],
+    "local": ["local-llm", "ollama", "fast"],
+    "claude": ["claude", "needs-claude", "ai-hard"]
+  },
+  "file_count_thresholds": {
+    "simple": 2,
+    "medium": 5
+  },
+  "line_count_thresholds": {
+    "simple": 50,
+    "medium": 200
+  },
+  "cost_targets": {
+    "local_percentage_goal": 70,
+    "monthly_claude_budget_usd": 20
+  }
+}
