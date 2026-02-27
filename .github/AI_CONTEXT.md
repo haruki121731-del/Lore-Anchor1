@@ -7,13 +7,13 @@
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| co-vibe router | ✅ built | `covibe-router/router.py` — FastAPI on port 8888 |
-| Ollama integration | ✅ configured | `qwen2.5-coder:7b` for simple tasks |
-| GitHub Actions | ✅ built | `.github/workflows/ai-code.yml` |
-| Make.com scenarios | ⏳ pending | blueprints in `.make/` directory |
-| Figma integration | ⏳ pending | script in `covibe-router/figma_bridge.py` |
-| Canva integration | ⏳ pending | script in `covibe-router/canva_bridge.py` |
-| Marketing automation | ✅ built | `haruki121731-del/marketing` repo |
+| co-vibe router | ✅ RUNNING | `covibe-router/router.py` — port 8888, tested 2026-02-27 |
+| Ollama integration | ✅ RUNNING | `qwen2.5-coder:7b` — pulled, tested, LOCAL free routing |
+| GitHub Actions | ✅ built | `.github/workflows/ai-code.yml` — label 'ai-code' to trigger |
+| Make.com scenarios | ⏳ pending | blueprints in `.make/` — import manually (free plan limit) |
+| Figma integration | ⏳ pending | `covibe-router/figma_bridge.py` |
+| Canva integration | ⏳ pending | `covibe-router/canva_bridge.py` |
+| Marketing automation | ✅ pushed | `haruki121731-del/marketing` — 5 scripts + note article |
 
 ## Architecture Decisions (for AI handoff)
 
@@ -49,20 +49,24 @@ setup-covibe.sh        ← one-command setup (Ollama + co-vibe)
 
 ## Pending Tasks (pick up from here)
 
-- [ ] Install Ollama locally: `bash setup-covibe.sh`
-- [ ] Start router: `pip install -r covibe-router/requirements.txt && python3 covibe-router/router.py`
-- [ ] Import Make.com blueprints from `.make/` directory
+- [x] Install Ollama locally — done, binary at `/tmp/OllamaApp/Ollama.app/Contents/Resources/ollama`
+- [x] Pull qwen2.5-coder:7b — done, models in `~/.ollama/models`
+- [x] Start router — done, tested via curl
+- [ ] **Persist Ollama across reboots** — on reboot: `bash start-covibe.sh` (re-extracts from Ollama-darwin.zip if needed)
+- [ ] Import Make.com blueprints from `.make/` directory (free plan: 2 scenarios max)
 - [ ] Connect Figma → Make.com webhook (see `.make/scenario-design-pipeline.json`)
 - [ ] Add GitHub secrets: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GROQ_API_KEY`
 - [ ] Label any GitHub issue `ai-code` to trigger auto-coding
+- [ ] Set up Twitter/Supabase secrets in `haruki121731-del/marketing` repo for auto-posting
 
 ## How to Use (Quick Start)
 
 ```bash
-# 1. One-time setup
-bash setup-covibe.sh
+# 1. Start everything (after reboot)
+bash start-covibe.sh
 
-# 2. Start the LLM router locally
+# 2. Or manually:
+# Start the LLM router locally
 python3 covibe-router/router.py &
 
 # 3. Classify a task
