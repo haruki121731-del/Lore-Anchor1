@@ -1,0 +1,249 @@
+name: 🤖 Hybrid LLM Auto-Coder
+
+# Triggered by issues labeled 'ai-code'
+# Routes to: Ollama (simple) | Claude (complex) via covibe-router
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'GitHub Issue number to process'
+        required: true
+        type: number
+      force_strategy:
+        description: 'Force LLM strategy'
+        type: choice
+        options: [auto, fast, strong]
+        default: auto
+
+jobs:
+  route-and-code:
+    name: Classify & Auto-Code
+    runs-on: ubuntu-latest
+    if: |
+      github.event.label.name == 'ai-code' ||
+      github.event_name == 'workflow_dispatch'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Get issue details ──────────────────────────────────────────────────
+      - name: Get issue details
+        id: issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issueNum = context.payload.issue?.number ||
+                             parseInt('${{ github.event.inputs.issue_number }}');
+            const { data } = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNum,
+            });
+            core.setOutput('title', data.title);
+            core.setOutput('body', data.body || '');
+            core.setOutput('labels', data.labels.map(l => l.name).join(','));
+            core.setOutput('number', issueNum);
+
+      # ── Classify complexity ────────────────────────────────────────────────
+      - name: Classify task complexity
+        id: classify
+        run: |
+          TITLE="${{ steps.issue.outputs.title }}"
+          BODY="${{ steps.issue.outputs.body }}"
+          LABELS="${{ steps.issue.outputs.labels }}"
+
+          # Simple keyword scoring (bash-based, no API needed)
+          COMPLEX_SCORE=0
+          SIMPLE_SCORE=0
+
+          COMPLEX_KWS="architecture security vulnerability auth jwt oauth migration schema cryptography c2pa signature distributed concurrency stripe rls redesign"
+          SIMPLE_KWS="test typo rename format lint docstring comment readme import boilerplate scaffold css style translation"
+
+          for kw in $COMPLEX_KWS; do
+            if echo "${TITLE,,} ${BODY,,}" | grep -q "$kw"; then
+              COMPLEX_SCORE=$((COMPLEX_SCORE + 1))
+            fi
+          done
+
+          for kw in $SIMPLE_KWS; do
+            if echo "${TITLE,,} ${BODY,,}" | grep -q "$kw"; then
+              SIMPLE_SCORE=$((SIMPLE_SCORE + 1))
+            fi
+          done
+
+          # Label overrides
+          if echo "$LABELS" | grep -qE "architecture|security|complex"; then
+            COMPLEXITY="complex"; STRATEGY="strong"
+          elif echo "$LABELS" | grep -qE "quick-fix|typo|docs|simple"; then
+            COMPLEXITY="simple"; STRATEGY="fast"
+          elif [ $COMPLEX_SCORE -ge 2 ]; then
+            COMPLEXITY="complex"; STRATEGY="strong"
+          elif [ $SIMPLE_SCORE -ge 2 ]; then
+            COMPLEXITY="simple"; STRATEGY="fast"
+          else
+            COMPLEXITY="medium"; STRATEGY="auto"
+          fi
+
+          # workflow_dispatch override
+          FORCED="${{ github.event.inputs.force_strategy }}"
+          if [ -n "$FORCED" ] && [ "$FORCED" != "auto" ]; then
+            STRATEGY="$FORCED"
+            [ "$FORCED" = "fast" ] && COMPLEXITY="simple"
+            [ "$FORCED" = "strong" ] && COMPLEXITY="complex"
+          fi
+
+          echo "complexity=$COMPLEXITY" >> $GITHUB_OUTPUT
+          echo "strategy=$STRATEGY" >> $GITHUB_OUTPUT
+          echo "Classified as: $COMPLEXITY (strategy=$STRATEGY)"
+
+      # ── Comment with routing decision ─────────────────────────────────────
+      - name: Post routing decision comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const complexity = '${{ steps.classify.outputs.complexity }}';
+            const strategy = '${{ steps.classify.outputs.strategy }}';
+            const models = { simple: '🦙 Ollama qwen2.5-coder:7b (local, free)',
+                             medium: '⚡ Claude Haiku (cheap+fast)',
+                             complex: '🧠 Claude Sonnet (powerful)' };
+            const emojis = { simple: '🟢', medium: '🟡', complex: '🔴' };
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ steps.issue.outputs.number }},
+              body: `## 🤖 LLM Router Decision\n\n` +
+                    `| Field | Value |\n|---|---|\n` +
+                    `| Complexity | ${emojis[complexity]} ${complexity} |\n` +
+                    `| Strategy | \`${strategy}\` |\n` +
+                    `| Model | ${models[complexity]} |\n` +
+                    `| Cost | ${complexity === 'simple' ? '**$0.00** (local!)' : 'API cost'} |\n\n` +
+                    `_Starting code generation..._`
+            });
+
+      # ── Python + co-vibe setup ─────────────────────────────────────────────
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12', cache: pip }
+
+      - name: Install dependencies
+        run: pip install anthropic openai groq httpx
+
+      # ── Execute with appropriate model ────────────────────────────────────
+      - name: Generate code (Claude)
+        if: steps.classify.outputs.complexity != 'simple'
+        id: generate_claude
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ISSUE_TITLE: ${{ steps.issue.outputs.title }}
+          ISSUE_BODY: ${{ steps.issue.outputs.body }}
+          STRATEGY: ${{ steps.classify.outputs.strategy }}
+        run: |
+          python3 - << 'PYEOF'
+          import os, json
+          import anthropic
+
+          title = os.environ["ISSUE_TITLE"]
+          body = os.environ["ISSUE_BODY"]
+
+          client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+
+          model = "claude-sonnet-4-6" if os.environ["STRATEGY"] == "strong" else "claude-haiku-4-5-20251001"
+
+          message = client.messages.create(
+              model=model,
+              max_tokens=4096,
+              system="""You are an expert engineer on Lore-Anchor, an AI protection SaaS.
+          Stack: Next.js 14 (App Router), FastAPI, Supabase, TypeScript, Python.
+          Produce minimal, clean code. Show exact file paths and changes.""",
+              messages=[{
+                  "role": "user",
+                  "content": f"Implement this GitHub issue:\n\nTitle: {title}\n\nDetails:\n{body}\n\nProvide complete implementation with file paths."
+              }]
+          )
+
+          result = message.content[0].text
+          with open("/tmp/code_result.md", "w") as f:
+              f.write(result)
+          print(f"Generated {len(result)} chars using {model}")
+          PYEOF
+
+      - name: Generate code (Ollama — local free)
+        if: steps.classify.outputs.complexity == 'simple'
+        id: generate_ollama
+        env:
+          ISSUE_TITLE: ${{ steps.issue.outputs.title }}
+          ISSUE_BODY: ${{ steps.issue.outputs.body }}
+        run: |
+          # Install Ollama in CI (cached)
+          curl -fsSL https://ollama.ai/install.sh | sh
+          ollama serve &>/dev/null &
+          sleep 5
+
+          # Pull tiny model for CI (fast)
+          ollama pull qwen2.5-coder:1.5b
+
+          python3 - << 'PYEOF'
+          import os, json, urllib.request
+
+          title = os.environ["ISSUE_TITLE"]
+          body = os.environ["ISSUE_BODY"]
+
+          prompt = f"""You are an expert engineer. Implement this task:
+
+          Title: {title}
+          Details: {body}
+
+          Provide exact file paths and minimal code changes."""
+
+          data = json.dumps({
+              "model": "qwen2.5-coder:1.5b",
+              "prompt": prompt,
+              "stream": False,
+              "options": {"temperature": 0.1}
+          }).encode()
+
+          req = urllib.request.Request(
+              "http://localhost:11434/api/generate",
+              data=data,
+              headers={"Content-Type": "application/json"}
+          )
+          with urllib.request.urlopen(req, timeout=120) as resp:
+              result = json.loads(resp.read())["response"]
+
+          with open("/tmp/code_result.md", "w") as f:
+              f.write(result)
+          print(f"[LOCAL] Generated {len(result)} chars — $0.00 cost!")
+          PYEOF
+
+      # ── Post result as PR-ready comment ───────────────────────────────────
+      - name: Post code result
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let result = '';
+            try { result = fs.readFileSync('/tmp/code_result.md', 'utf8'); }
+            catch { result = 'Code generation completed but output not captured.'; }
+
+            const complexity = '${{ steps.classify.outputs.complexity }}';
+            const isLocal = complexity === 'simple';
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ steps.issue.outputs.number }},
+              body: `## ${isLocal ? '🦙 Local LLM' : '🧠 Claude'} Generated Code\n\n` +
+                    `${isLocal ? '> 💚 **$0.00 cost** — ran entirely on local Ollama\n\n' : ''}` +
+                    `${result.slice(0, 60000)}\n\n` +
+                    `---\n_To apply: copy the code above into your editor, or run \`make apply-issue-${{ steps.issue.outputs.number }}\`_`
+            });
+
+            // Label the issue
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ steps.issue.outputs.number }},
+              labels: [isLocal ? 'ai-coded-local' : 'ai-coded-claude']
+            });
