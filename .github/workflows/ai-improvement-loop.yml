@@ -37,7 +37,19 @@ jobs:
       
       - run: pip install anthropic
       
+      - name: Check required secrets
+        id: check-secrets
+        run: |
+          if [ -z "${{ secrets.ANTHROPIC_API_KEY }}" ]; then
+            echo "ANTHROPIC_API_KEY is not set. Skipping AI analysis."
+            echo "Add at: github.com/haruki121731-del/Lore-Anchor1/settings/secrets"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Analyze codebase and create improvement PR
+        if: steps.check-secrets.outputs.skip != 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           FOCUS: ${{ github.event.inputs.focus || 'auto' }}
@@ -141,7 +153,7 @@ jobs:
           PYEOF
       
       - name: Apply improvement and create PR
-        if: always()
+        if: always() && steps.check-secrets.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
