@@ -27,7 +27,7 @@ import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import redis
 import torch
@@ -185,6 +185,7 @@ def _update_image_status(
     *,
     protected_url: str | None = None,
     watermark_id: str | None = None,
+    c2pa_manifest: dict[str, Any] | None = None,
 ) -> None:
     """Update the ``images`` row for *image_id* in Supabase."""
     data: dict[str, Any] = {"status": status}
@@ -192,6 +193,8 @@ def _update_image_status(
         data["protected_url"] = protected_url
     if watermark_id is not None:
         data["watermark_id"] = watermark_id
+    if c2pa_manifest is not None:
+        data["c2pa_manifest"] = c2pa_manifest
     try:
         sb.table("images").update(data).eq("id", image_id).execute()
         logger.info("images.status -> '%s' for image_id=%s", status, image_id)
@@ -311,7 +314,7 @@ def _preload_models(device: torch.device) -> None:
 # ---------------------------------------------------------------------------
 # Pipeline
 # ---------------------------------------------------------------------------
-def process_image(image_id: str, original_r2_key: str) -> dict[str, str]:
+def process_image(image_id: str, original_r2_key: str) -> dict[str, str | dict[str, Any] | None]:
     """Execute the full defense pipeline for a single image.
 
     Each step is wrapped individually so that failures report the exact
@@ -322,7 +325,7 @@ def process_image(image_id: str, original_r2_key: str) -> dict[str, str]:
         original_r2_key: R2 object key for the original uploaded image.
 
     Returns:
-        dict with ``protected_r2_key`` and ``watermark_id``.
+        dict with ``protected_r2_key``, ``watermark_id``, and ``c2pa_manifest``.
     """
     logger.info("Starting pipeline for image_id=%s", image_id)
 
@@ -394,9 +397,10 @@ def process_image(image_id: str, original_r2_key: str) -> dict[str, str]:
             raise PipelineStepError("verify_watermark", exc) from exc
 
         # --- Step: c2pa_sign ---
+        c2pa_manifest: dict[str, Any] | None = None
         try:
             logger.info("Step: c2pa_sign — signing image")
-            sign_c2pa(str(protected_path), str(signed_path))
+            c2pa_manifest = sign_c2pa(str(protected_path), str(signed_path))
             logger.info("Step completed: c2pa_sign for image_id=%s", image_id)
         except Exception as exc:
             raise PipelineStepError("c2pa_sign", exc) from exc
@@ -413,6 +417,7 @@ def process_image(image_id: str, original_r2_key: str) -> dict[str, str]:
     return {
         "protected_r2_key": protected_r2_key,
         "watermark_id": watermark_id,
+        "c2pa_manifest": c2pa_manifest,
     }
 
 
@@ -497,6 +502,7 @@ def _run_consumer() -> None:
                     "completed",
                     protected_url=protected_url,
                     watermark_id=result_data["watermark_id"],
+                    c2pa_manifest=cast(dict[str, Any] | None, result_data.get("c2pa_manifest")),
                 )
             except Exception:
                 logger.error("Failed to mark image as completed after retries")

@@ -1,0 +1,236 @@
+name: 🤖 Nightly AI Improvement Loop
+
+on:
+  schedule:
+    # 毎日 JST 02:00 (UTC 17:00) — 深夜に静かに改善
+    - cron: '0 17 * * *'
+  workflow_dispatch:
+    inputs:
+      focus:
+        description: 'Focus area for improvement'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - api
+          - worker
+          - frontend
+          - tests
+
+jobs:
+  analyze-and-improve:
+    name: AI Code Analysis & PR Generation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 50
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      
+      - run: pip install anthropic
+      
+      - name: Check required secrets
+        id: check-secrets
+        run: |
+          if [ -z "${{ secrets.ANTHROPIC_API_KEY }}" ]; then
+            echo "ANTHROPIC_API_KEY is not set. Skipping AI analysis."
+            echo "Add at: github.com/haruki121731-del/Lore-Anchor1/settings/secrets"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Analyze codebase and create improvement PR
+        if: steps.check-secrets.outputs.skip != 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FOCUS: ${{ github.event.inputs.focus || 'auto' }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 << 'PYEOF'
+          import os, json, subprocess
+          from anthropic import Anthropic
+          from datetime import datetime
+          
+          client = Anthropic()
+          focus = os.environ.get('FOCUS', 'auto')
+          date_str = datetime.now().strftime('%Y-%m-%d')
+          
+          # Gather context
+          recent_commits = subprocess.run(
+              ['git', 'log', '--oneline', '-20'], capture_output=True, text=True
+          ).stdout
+          
+          open_issues = subprocess.run(
+              ['gh', 'issue', 'list', '--state', 'open', '--json', 'title,number,labels', '--limit', '10'],
+              capture_output=True, text=True, env={**os.environ, 'GH_TOKEN': os.environ['GH_TOKEN']}
+          ).stdout
+          
+          # Key files for context
+          files_to_check = {
+              'auto': ['apps/api/main.py', 'workers/gpu-worker/main.py', 'apps/web/src/app/dashboard/page.tsx'],
+              'api': ['apps/api/main.py', 'apps/api/routers/images.py', 'apps/api/services/database.py'],
+              'worker': ['workers/gpu-worker/main.py', 'workers/gpu-worker/core/mist/mist_v2.py'],
+              'frontend': ['apps/web/src/app/dashboard/page.tsx', 'apps/web/src/components/image-uploader.tsx'],
+              'tests': ['apps/api/tests/test_upload.py', 'apps/api/tests/test_health.py'],
+          }
+          
+          file_contents = []
+          for f in files_to_check.get(focus, files_to_check['auto']):
+              try:
+                  content = open(f).read()[:3000]
+                  file_contents.append(f"### {f}\n```\n{content}\n```")
+              except:
+                  pass
+          
+          prompt = f"""You are analyzing the Lore-Anchor codebase (AI art protection SaaS for Japanese illustrators).
+          
+          **Recent commits:**
+          {recent_commits}
+          
+          **Open issues:**
+          {open_issues[:2000]}
+          
+          **Code files ({focus} focus):**
+          {chr(10).join(file_contents[:3])}
+          
+          **Your task:** Identify the single highest-impact, safe improvement you can make today.
+          Focus on: bug fixes, error handling gaps, performance issues, missing tests, UX improvements.
+          
+          Respond in JSON:
+          {{
+            "improvement_title": "Short title (50 chars max)",
+            "improvement_type": "bugfix|enhancement|test|docs",
+            "target_file": "path/to/file.py",
+            "problem": "What's wrong or missing (2-3 sentences)",
+            "solution": "Exact code change to make",
+            "old_code": "Exact existing code to replace (or empty string)",
+            "new_code": "New code to insert",
+            "confidence": "high|medium",
+            "risk": "low|medium"
+          }}
+          
+          Only suggest changes with confidence=high AND risk=low. Otherwise return {{"skip": true, "reason": "..."}}"""
+          
+          response = client.messages.create(
+              model="claude-haiku-4-5-20251001",
+              max_tokens=2000,
+              messages=[{"role": "user", "content": prompt}]
+          )
+          
+          text = response.content[0].text
+          # Extract JSON
+          import re
+          json_match = re.search(r'\{.*\}', text, re.DOTALL)
+          if not json_match:
+              print("No JSON found, skipping")
+              exit(0)
+          
+          result = json.loads(json_match.group())
+          
+          if result.get('skip'):
+              print(f"AI decided to skip: {result.get('reason')}")
+              exit(0)
+          
+          print(f"Improvement: {result['improvement_title']}")
+          print(f"Type: {result['improvement_type']} | Risk: {result['risk']}")
+          
+          # Write improvement to file for next step
+          with open('/tmp/ai_improvement.json', 'w') as f:
+              json.dump(result, f, indent=2)
+          
+          # Save date for branch name
+          with open('/tmp/date.txt', 'w') as f:
+              f.write(date_str)
+          PYEOF
+      
+      - name: Apply improvement and create PR
+        if: always() && steps.check-secrets.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ ! -f /tmp/ai_improvement.json ]; then
+            echo "No improvement to apply"
+            exit 0
+          fi
+          
+          python3 << 'PYEOF'
+          import json, os, subprocess
+          from datetime import datetime
+          
+          with open('/tmp/ai_improvement.json') as f:
+              improvement = json.load(f)
+          
+          date_str = datetime.now().strftime('%Y-%m-%d')
+          branch = f"ai-improve/{date_str}-{improvement['improvement_type']}"
+          title = improvement['improvement_title']
+          target = improvement['target_file']
+          old_code = improvement.get('old_code', '')
+          new_code = improvement.get('new_code', '')
+          
+          if not old_code or not new_code or not os.path.exists(target):
+              print(f"Skipping: missing data or file not found: {target}")
+              exit(0)
+          
+          # Configure git
+          subprocess.run(['git', 'config', 'user.name', 'Lore-Anchor AI'], check=True)
+          subprocess.run(['git', 'config', 'user.email', 'ai@lore-anchor.com'], check=True)
+          subprocess.run(['git', 'checkout', '-b', branch], check=True)
+          
+          # Apply change
+          content = open(target).read()
+          if old_code not in content:
+              print(f"Warning: old_code not found in {target}, skipping")
+              exit(0)
+          
+          new_content = content.replace(old_code, new_code, 1)
+          with open(target, 'w') as f:
+              f.write(new_content)
+          
+          # Commit
+          subprocess.run(['git', 'add', target], check=True)
+          subprocess.run(['git', 'commit', '-m', f'ai: {title}\n\n[auto-generated by AI Improvement Loop]\n[skip ci]'], check=True)
+          subprocess.run(['git', 'push', 'origin', branch], env={**os.environ, 'GITHUB_TOKEN': os.environ['GH_TOKEN']}, check=True)
+          
+          # Create PR
+          body = "\n".join([
+              "## AI-Generated Improvement",
+              "",
+              f"**Type:** {improvement['improvement_type']}",
+              f"**Target:** `{target}`",
+              "",
+              "### Problem",
+              improvement['problem'],
+              "",
+              "### Solution",
+              improvement['solution'],
+              "",
+              "### Confidence",
+              f"- Confidence: {improvement['confidence']}",
+              f"- Risk: {improvement['risk']}",
+              "",
+              "---",
+              "*Auto-generated by [AI Improvement Loop](.github/workflows/ai-improvement-loop.yml)*",
+              "*Review carefully before merging. Auto-close if not merged within 48h.*",
+          ])
+          
+          result = subprocess.run([
+              'gh', 'pr', 'create',
+              '--title', f'[AI] {title}',
+              '--body', body,
+              '--base', 'main',
+              '--head', branch,
+              '--label', 'ai-coded-claude'
+          ], capture_output=True, text=True, env={**os.environ, 'GH_TOKEN': os.environ['GH_TOKEN']})
+          
+          print(result.stdout or result.stderr)
+          PYEOF

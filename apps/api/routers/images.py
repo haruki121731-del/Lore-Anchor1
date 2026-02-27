@@ -14,8 +14,10 @@ from apps.api.core.config import get_settings
 from apps.api.core.security import get_current_user_id
 from apps.api.models.schemas import (
     DeleteResponse,
+    DownloadTrackedResponse,
     ImageRecord,
     PaginatedImageListResponse,
+    RetryResponse,
     TaskStatusResponse,
     UploadResponse,
 )
@@ -295,6 +297,45 @@ async def delete_image(
 
 
 # ------------------------------------------------------------------
+# POST /images/{image_id}/downloaded
+# ------------------------------------------------------------------
+@router.post(
+    "/{image_id}/downloaded",
+    response_model=DownloadTrackedResponse,
+    summary="Track a completed image download event",
+)
+@limiter.limit(get_settings().RATE_LIMIT_READ)
+async def track_download(
+    request: Request,
+    image_id: str,
+    user_id: str = Depends(get_current_user_id),
+    db: DatabaseService = Depends(get_database_service),
+) -> DownloadTrackedResponse:
+    """Increment download count for a completed image."""
+    image = db.get_image(image_id)
+    if image is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Image not found",
+        )
+    if image["user_id"] != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
+    if image["status"] != "completed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Download can only be tracked for completed images",
+        )
+    download_count = db.increment_download_count(image_id)
+    return DownloadTrackedResponse(
+        image_id=image_id,
+        download_count=download_count,
+    )
+
+
+# ------------------------------------------------------------------
 # GET /tasks/{image_id}/status
 # ------------------------------------------------------------------
 
@@ -340,6 +381,58 @@ async def get_task_status(
         started_at=task.get("started_at") if task else None,
         completed_at=task.get("completed_at") if task else None,
     )
+
+
+@tasks_router.post(
+    "/{image_id}/retry",
+    response_model=RetryResponse,
+    summary="Retry a failed task",
+)
+@limiter.limit(get_settings().RATE_LIMIT_UPLOAD)
+async def retry_task(
+    request: Request,
+    image_id: str,
+    user_id: str = Depends(get_current_user_id),
+    db: DatabaseService = Depends(get_database_service),
+    queue: QueueService = Depends(get_queue_service),
+) -> RetryResponse:
+    """Reset failed task to ``pending`` and enqueue for retry."""
+    image = db.get_image(image_id)
+    if image is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Image not found",
+        )
+    if image["user_id"] != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
+    if image["status"] != "failed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only failed images can be retried",
+        )
+
+    storage_key: str | None = image.get("original_url")
+    if not storage_key:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Original image key is missing; retry unavailable",
+        )
+
+    try:
+        db.set_pending(image_id)
+        await queue.enqueue(image_id=image_id, storage_key=storage_key)
+    except Exception as exc:
+        logger.exception("Retry enqueue failed for image %s", image_id)
+        _mark_failed_safe(db, image_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to enqueue retry task",
+        ) from exc
+
+    return RetryResponse(image_id=image_id, status="pending", queued=True)
 
 
 # ------------------------------------------------------------------

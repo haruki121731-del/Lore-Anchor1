@@ -1,28 +1,37 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import type { ImageRecord, ImageStatus } from "@/lib/api/types";
-import { listImages, deleteImage } from "@/lib/api/images";
+import type { ImageRecord, ImageStatus, TaskStatus } from "@/lib/api/types";
+import {
+  deleteImage,
+  getTaskStatus,
+  listImages,
+  retryTask,
+  trackDownload,
+} from "@/lib/api/images";
 import { getSupabaseClient } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 
 function StatusBadge({ status }: { status: ImageStatus }) {
-  const colors: Record<ImageStatus, string> = {
-    pending:
-      "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
-    processing:
-      "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
-    completed:
-      "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
-    failed: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
+  const classes: Record<ImageStatus, string> = {
+    pending: "bg-amber-400/15 text-amber-200 border border-amber-300/30",
+    processing: "bg-cyan-400/15 text-cyan-200 border border-cyan-300/30",
+    completed: "bg-emerald-400/15 text-emerald-200 border border-emerald-300/30",
+    failed: "bg-rose-400/15 text-rose-200 border border-rose-300/30",
+  };
+
+  const labels: Record<ImageStatus, string> = {
+    pending: "pending",
+    processing: "processing",
+    completed: "completed",
+    failed: "failed",
   };
 
   return (
-    <span
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${colors[status]}`}
-    >
-      {status}
+    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${classes[status]}`}>
+      {labels[status]}
     </span>
   );
 }
@@ -30,6 +39,24 @@ function StatusBadge({ status }: { status: ImageStatus }) {
 function extractFilename(url: string): string {
   const parts = url.split("/");
   return parts[parts.length - 1] || url;
+}
+
+function statusProgress(status: ImageStatus): number {
+  if (status === "pending") return 20;
+  if (status === "processing") return 65;
+  return 100;
+}
+
+function summarizeError(errorLog?: string | null): string {
+  if (!errorLog) return "保護処理に失敗しました。再試行してください。";
+  const compact = errorLog.replace(/\s+/g, " ");
+  if (compact.includes("Watermark destroyed")) {
+    return "透かし検証に失敗しました。別の解像度・形式で再試行してください。";
+  }
+  if (compact.includes("FileNotFoundError") || compact.includes("NoSuchKey")) {
+    return "原本画像が取得できませんでした。再アップロードまたは再試行してください。";
+  }
+  return "処理に失敗しました。再試行してください。";
 }
 
 interface ImageListProps {
@@ -40,85 +67,152 @@ const PAGE_SIZE = 20;
 
 export function ImageList({ refreshKey }: ImageListProps) {
   const [images, setImages] = useState<ImageRecord[]>([]);
+  const [taskStatusMap, setTaskStatusMap] = useState<Record<string, TaskStatus>>({});
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
   const [total, setTotal] = useState(0);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const mountedRef = useRef(true);
+
+  const getAccessToken = useCallback(async () => {
+    const supabase = getSupabaseClient();
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (!session) throw new Error("ログイン状態が切れました。再ログインしてください。");
+    return session.access_token;
+  }, []);
+
+  const fetchTaskStatuses = useCallback(async (records: ImageRecord[], token: string) => {
+    const targetIds = records
+      .filter((img) => img.status === "failed" || img.status === "pending" || img.status === "processing")
+      .map((img) => img.image_id);
+
+    if (targetIds.length === 0) {
+      if (mountedRef.current) setTaskStatusMap({});
+      return;
+    }
+
+    const pairs = await Promise.all(
+      targetIds.map(async (imageId) => {
+        try {
+          const status = await getTaskStatus(imageId, token);
+          return [imageId, status] as const;
+        } catch {
+          return [imageId, null] as const;
+        }
+      })
+    );
+
+    if (!mountedRef.current) return;
+
+    const next: Record<string, TaskStatus> = {};
+    for (const [imageId, status] of pairs) {
+      if (status) next[imageId] = status;
+    }
+    setTaskStatusMap(next);
+  }, []);
 
   const fetchImages = useCallback(async (targetPage: number = page) => {
     try {
-      const supabase = getSupabaseClient();
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session) {
-        if (mountedRef.current) setError("Not authenticated");
-        return;
-      }
-
-      const data = await listImages(session.access_token, targetPage, PAGE_SIZE);
+      const token = await getAccessToken();
+      const data = await listImages(token, targetPage, PAGE_SIZE);
       if (mountedRef.current) {
         setImages(data.images);
         setHasMore(data.has_more);
         setTotal(data.total);
         setError(null);
       }
+      await fetchTaskStatuses(data.images, token);
     } catch (err) {
       if (mountedRef.current) {
-        setError(
-          err instanceof Error ? err.message : "Failed to load images"
-        );
+        setError(err instanceof Error ? err.message : "画像一覧の取得に失敗しました");
       }
     } finally {
       if (mountedRef.current) setLoading(false);
     }
-  }, [page]);
+  }, [fetchTaskStatuses, getAccessToken, page]);
 
   const handleDelete = useCallback(async (imageId: string) => {
     try {
       setDeletingId(imageId);
-      const supabase = getSupabaseClient();
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session) return;
-
-      await deleteImage(imageId, session.access_token);
+      const token = await getAccessToken();
+      await deleteImage(imageId, token);
       setImages((prev) => prev.filter((img) => img.image_id !== imageId));
-      setTotal((prev) => prev - 1);
+      setTotal((prev) => Math.max(prev - 1, 0));
+      setTaskStatusMap((prev) => {
+        const next = { ...prev };
+        delete next[imageId];
+        return next;
+      });
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Failed to delete image"
-      );
+      setError(err instanceof Error ? err.message : "削除に失敗しました");
     } finally {
       setDeletingId(null);
     }
-  }, []);
+  }, [getAccessToken]);
 
-  // Initial fetch + refetch on refreshKey or page change
+  const handleRetry = useCallback(async (imageId: string) => {
+    try {
+      setRetryingId(imageId);
+      const token = await getAccessToken();
+      await retryTask(imageId, token);
+      setError(null);
+      await fetchImages(page);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "再試行に失敗しました");
+    } finally {
+      setRetryingId(null);
+    }
+  }, [fetchImages, getAccessToken, page]);
+
+  const handleDownload = useCallback(async (img: ImageRecord) => {
+    if (!img.protected_url) return;
+
+    try {
+      setDownloadingId(img.image_id);
+      const token = await getAccessToken();
+      const tracked = await trackDownload(img.image_id, token);
+      setImages((prev) =>
+        prev.map((item) =>
+          item.image_id === img.image_id
+            ? { ...item, download_count: tracked.download_count }
+            : item
+        )
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "ダウンロード記録に失敗しました");
+    } finally {
+      const a = document.createElement("a");
+      a.href = img.protected_url;
+      a.download = extractFilename(img.original_url);
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.click();
+      setDownloadingId(null);
+    }
+  }, [getAccessToken]);
+
   useEffect(() => {
     setLoading(true);
-    fetchImages(page);
+    void fetchImages(page);
   }, [fetchImages, refreshKey, page]);
 
-  // Poll every 5 seconds, stop when all images are completed or failed
   useEffect(() => {
-    const allSettled =
-      images.length > 0 &&
-      images.every((img) => img.status === "completed" || img.status === "failed");
+    const hasInFlight = images.some((img) => img.status === "pending" || img.status === "processing");
+    if (!hasInFlight) return;
 
-    if (allSettled) return;
-
-    const interval = setInterval(() => fetchImages(page), 5000);
+    const interval = setInterval(() => {
+      void fetchImages(page);
+    }, 5000);
     return () => clearInterval(interval);
   }, [fetchImages, images, page]);
 
-  // Cleanup ref on unmount
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -128,25 +222,28 @@ export function ImageList({ refreshKey }: ImageListProps) {
 
   if (loading && images.length === 0) {
     return (
-      <p className="py-8 text-center text-sm text-zinc-500">Loading...</p>
+      <div className="space-y-3 pt-4">
+        <Card className="border-white/10 bg-slate-950/50"><CardContent className="h-20 animate-pulse" /></Card>
+        <Card className="border-white/10 bg-slate-950/50"><CardContent className="h-20 animate-pulse" /></Card>
+      </div>
     );
   }
 
   if (error) {
     return (
       <div className="py-8 text-center">
-        <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+        <p className="rounded-lg border border-rose-300/30 bg-rose-500/10 p-3 text-sm text-rose-200">{error}</p>
         <Button
           variant="outline"
           size="sm"
-          className="mt-2"
+          className="mt-3"
           onClick={() => {
             setError(null);
             setLoading(true);
-            fetchImages(page);
+            void fetchImages(page);
           }}
         >
-          Retry
+          再読み込み
         </Button>
       </div>
     );
@@ -154,89 +251,109 @@ export function ImageList({ refreshKey }: ImageListProps) {
 
   if (images.length === 0) {
     return (
-      <p className="py-8 text-center text-sm text-zinc-500">
-        No images yet. Upload one above!
-      </p>
+      <Card className="mt-4 border-white/10 bg-slate-950/30">
+        <CardContent className="py-10 text-center text-sm text-slate-300">
+          まだ画像がありません。最初の1枚をアップロードして保護処理を開始してください。
+        </CardContent>
+      </Card>
     );
   }
 
   return (
-    <div className="space-y-3">
-      {images.map((img) => (
-        <Card key={img.image_id}>
-          <CardContent className="flex items-center gap-4 py-4">
-            {img.status === "completed" && img.protected_url ? (
-              /* eslint-disable-next-line @next/next/no-img-element */
-              <img
-                src={img.protected_url}
-                alt={extractFilename(img.original_url)}
-                className="h-16 w-16 rounded object-cover"
-              />
-            ) : (
-              <div className="flex h-16 w-16 items-center justify-center rounded bg-zinc-100 dark:bg-zinc-800">
-                <svg
-                  className="h-6 w-6 text-zinc-400"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={1.5}
-                    d="M4 16l4.586-4.586a2 2 0 0 1 2.828 0L16 16m-2-2 1.586-1.586a2 2 0 0 1 2.828 0L20 14m-6-6h.01M6 20h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2z"
+    <div className="space-y-3 pt-4">
+      {images.map((img) => {
+        const taskStatus = taskStatusMap[img.image_id];
+        const showProgress = img.status === "pending" || img.status === "processing";
+
+        return (
+          <Card key={img.image_id} className="border-white/10 bg-slate-950/40">
+            <CardContent className="space-y-3 py-4">
+              <div className="flex items-start gap-4">
+                {img.status === "completed" && img.protected_url ? (
+                  /* eslint-disable-next-line @next/next/no-img-element */
+                  <img
+                    src={img.protected_url}
+                    alt={extractFilename(img.original_url)}
+                    className="h-16 w-16 rounded-md object-cover ring-1 ring-white/10"
                   />
-                </svg>
+                ) : (
+                  <div className="flex h-16 w-16 items-center justify-center rounded-md bg-slate-800 text-slate-300">
+                    <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={1.5}
+                        d="M4 16l4.586-4.586a2 2 0 0 1 2.828 0L16 16m-2-2 1.586-1.586a2 2 0 0 1 2.828 0L20 14m-6-6h.01M6 20h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2z"
+                      />
+                    </svg>
+                  </div>
+                )}
+
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-white">{extractFilename(img.original_url)}</p>
+                  <p className="text-xs text-slate-300/80">{new Date(img.created_at).toLocaleString()}</p>
+                  {img.status === "failed" && (
+                    <p className="mt-2 rounded-md border border-rose-300/20 bg-rose-500/10 px-2 py-1 text-xs text-rose-100">
+                      {summarizeError(taskStatus?.error_log)}
+                    </p>
+                  )}
+                </div>
+
+                <StatusBadge status={img.status} />
               </div>
-            )}
 
-            <div className="flex-1 min-w-0">
-              <p className="truncate text-sm font-medium">
-                {extractFilename(img.original_url)}
-              </p>
-              <p className="text-xs text-zinc-500">
-                {new Date(img.created_at).toLocaleString()}
-              </p>
-            </div>
-
-            <StatusBadge status={img.status} />
-
-            {img.status === "completed" && img.protected_url && (
-              <Button variant="outline" size="sm" asChild>
-                <a
-                  href={img.protected_url}
-                  download={extractFilename(img.original_url)}
-                >
-                  Download
-                </a>
-              </Button>
-            )}
-
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={deletingId === img.image_id}
-              onClick={() => handleDelete(img.image_id)}
-              className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
-            >
-              {deletingId === img.image_id ? (
-                <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-              ) : (
-                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                    d="m19 7-.867 12.142A2 2 0 0 1 16.138 21H7.862a2 2 0 0 1-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v3M4 7h16"
-                  />
-                </svg>
+              {showProgress && (
+                <div className="space-y-1">
+                  <Progress value={statusProgress(img.status)} />
+                  <p className="text-xs text-slate-300">
+                    {img.status === "pending"
+                      ? "キュー待機中です。まもなく処理が開始されます。"
+                      : "保護処理中です。通常30秒〜数分で完了します。"}
+                  </p>
+                </div>
               )}
-            </Button>
-          </CardContent>
-        </Card>
-      ))}
 
-      {/* Pagination controls */}
+              <div className="flex flex-wrap items-center gap-2">
+                {img.status === "completed" && img.protected_url && (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={downloadingId === img.image_id}
+                      onClick={() => void handleDownload(img)}
+                    >
+                      {downloadingId === img.image_id ? "記録中..." : "ダウンロード"}
+                    </Button>
+                    <span className="text-xs text-slate-300/80">download: {img.download_count ?? 0}</span>
+                  </>
+                )}
+
+                {img.status === "failed" && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={retryingId === img.image_id}
+                    onClick={() => void handleRetry(img.image_id)}
+                  >
+                    {retryingId === img.image_id ? "再投入中..." : "Retry"}
+                  </Button>
+                )}
+
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={deletingId === img.image_id}
+                  onClick={() => void handleDelete(img.image_id)}
+                  className="text-rose-300 hover:bg-rose-500/15 hover:text-rose-100"
+                >
+                  {deletingId === img.image_id ? "削除中..." : "削除"}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })}
+
       {total > PAGE_SIZE && (
         <div className="flex items-center justify-between pt-4">
           <Button
@@ -245,10 +362,10 @@ export function ImageList({ refreshKey }: ImageListProps) {
             disabled={page <= 1}
             onClick={() => setPage((p) => Math.max(1, p - 1))}
           >
-            Previous
+            前へ
           </Button>
-          <span className="text-sm text-zinc-500">
-            Page {page} of {Math.ceil(total / PAGE_SIZE)}
+          <span className="text-sm text-slate-300">
+            Page {page} / {Math.ceil(total / PAGE_SIZE)}
           </span>
           <Button
             variant="outline"
@@ -256,7 +373,7 @@ export function ImageList({ refreshKey }: ImageListProps) {
             disabled={!hasMore}
             onClick={() => setPage((p) => p + 1)}
           >
-            Next
+            次へ
           </Button>
         </div>
       )}
