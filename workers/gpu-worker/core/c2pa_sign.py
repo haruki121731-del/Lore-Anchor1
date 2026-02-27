@@ -32,43 +32,38 @@ def _get_signing_credentials() -> tuple[bytes, bytes]:
     return _DEV_CERT, _DEV_KEY
 
 
-def sign_c2pa(input_path: str, output_path: str) -> None:
+def sign_c2pa(input_path: str, output_path: str) -> dict[str, object] | None:
     """Sign an image with a C2PA manifest.
 
     Args:
         input_path: Path to the image to sign.
         output_path: Path where the signed image will be written.
+
+    Returns:
+        The manifest dict that was embedded, or None if signing was skipped/failed.
     """
+    manifest_data: dict[str, object] = {
+        "claim_generator": "lore-anchor/1.0",
+        "title": "Protected by Lore Anchor",
+        "assertions": [
+            {
+                "label": "c2pa.training-mining",
+                "data": {
+                    "entries": {
+                        "c2pa.ai_generative_training": {"use": "notAllowed"},
+                        "c2pa.ai_inference": {"use": "notAllowed"},
+                        "c2pa.ai_training": {"use": "notAllowed"},
+                        "c2pa.data_mining": {"use": "notAllowed"},
+                    },
+                },
+            },
+        ],
+    }
+
     try:
         from c2pa import Builder, SigningAlg, create_signer
 
-        manifest_json = json.dumps({
-            "claim_generator": "lore-anchor/1.0",
-            "title": "Protected by Lore Anchor",
-            "assertions": [
-                {
-                    "label": "c2pa.training-mining",
-                    "data": {
-                        "entries": {
-                            "c2pa.ai_generative_training": {
-                                "use": "notAllowed",
-                            },
-                            "c2pa.ai_inference": {
-                                "use": "notAllowed",
-                            },
-                            "c2pa.ai_training": {
-                                "use": "notAllowed",
-                            },
-                            "c2pa.data_mining": {
-                                "use": "notAllowed",
-                            },
-                        },
-                    },
-                },
-            ],
-        })
-
-        builder = Builder(manifest_json)
+        builder = Builder(json.dumps(manifest_data))
 
         cert_pem, key_pem = _get_signing_credentials()
         signer = create_signer(
@@ -80,6 +75,7 @@ def sign_c2pa(input_path: str, output_path: str) -> None:
 
         builder.sign_file(signer, input_path, output_path)
         logger.info("C2PA manifest signed: %s -> %s", input_path, output_path)
+        return manifest_data
 
     except ImportError:
         logger.warning(
@@ -87,11 +83,13 @@ def sign_c2pa(input_path: str, output_path: str) -> None:
         )
         import shutil
         shutil.copy2(input_path, output_path)
+        return None
 
     except Exception:
         logger.exception("C2PA signing failed, copying unsigned file.")
         import shutil
         shutil.copy2(input_path, output_path)
+        return None
 
 
 # ---------------------------------------------------------------------------
