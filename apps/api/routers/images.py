@@ -42,6 +42,9 @@ _ALLOWED_CONTENT_TYPES: set[str] = {
 
 _MAX_FILE_SIZE: int = 20 * 1024 * 1024  # 20 MB
 
+# Free tier limits
+FREE_TIER_MONTHLY_LIMIT: int = 5
+
 # ------------------------------------------------------------------
 # Magic byte signatures for file type validation
 # ------------------------------------------------------------------
@@ -185,6 +188,14 @@ async def upload_image(
     Returns:
         ``image_id`` and current ``status``.
     """
+    # ── 0. Check usage limit ─────────────────────────────────────────
+    can_upload, used, limit = check_user_usage_limit(user_id, db)
+    if not can_upload:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Monthly limit reached ({used}/{limit} images). Upgrade to Pro for unlimited processing.",
+        )
+
     # ── 1. Validate ──────────────────────────────────────────────────
     content_type: str = file.content_type or "application/octet-stream"
     if content_type not in _ALLOWED_CONTENT_TYPES:
@@ -438,6 +449,32 @@ async def retry_task(
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
+def check_user_usage_limit(user_id: str, db: DatabaseService) -> tuple[bool, int, int]:
+    """
+    Check if user has exceeded their monthly usage limit.
+    
+    Returns:
+        (can_upload: bool, used: int, limit: int)
+    """
+    from datetime import datetime
+    
+    # Get user's subscription tier
+    profile = db.get_profile(user_id)
+    tier = profile.get("subscription_tier", "free") if profile else "free"
+    
+    # Pro users have no limit (or high limit)
+    if tier == "pro":
+        return True, 0, 100  # Pro limit is handled separately
+    
+    # Free tier: check monthly count
+    now = datetime.utcnow()
+    start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    
+    count = db.count_images_this_month(user_id, start_of_month.isoformat())
+    
+    return count < FREE_TIER_MONTHLY_LIMIT, count, FREE_TIER_MONTHLY_LIMIT
+
+
 def _extension_from_content_type(content_type: str) -> str:
     """Map a MIME type to a file extension."""
     mapping: dict[str, str] = {

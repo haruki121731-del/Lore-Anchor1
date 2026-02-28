@@ -216,6 +216,30 @@ class DatabaseService:
             return dict(response.data[0])  # type: ignore[arg-type]
         return None
 
+    def get_profile(self, user_id: str) -> dict[str, Any] | None:
+        """Fetch user profile with subscription info."""
+        response = (
+            self._client.table("profiles")
+            .select("*")
+            .eq("id", user_id)
+            .execute()
+        )
+        if response.data:
+            return dict(response.data[0])  # type: ignore[arg-type]
+        return None
+
+    def count_images_this_month(self, user_id: str, since: str) -> int:
+        """Count images processed this month for usage tracking."""
+        response = (
+            self._client.table(_TABLE_IMAGES)
+            .select("id", count="exact")  # type: ignore[arg-type]
+            .eq("user_id", user_id)
+            .gte("created_at", since)
+            .neq("status", "deleted")
+            .execute()
+        )
+        return response.count or 0
+
 
 class DebugDatabaseService(DatabaseService):
     """In-memory stub used when ``DEBUG=true``.
