@@ -1,0 +1,102 @@
+# Research Team Configuration
+# AIエージェント: 研究チーム
+
+name: Research Team
+identifier: research
+code: 🔬
+
+mission: |
+  技術的優位性を維持し、新しい脅威と技術を
+  先取りして研究する。
+
+responsibilities:
+  - 最新AI技術の調査
+  - 敵対的機械学習の研究
+  - 特許・論文の監視
+  - プロトタイピング
+  - 技術トレンド分析
+  - イノベーション提案
+
+decision_authority:
+  level_2: # チーム内
+    - 研究プロジェクト選定
+    - PoC実施
+    
+  level_3: # 横断
+    - 新技術実験
+    - 外部研究機関との連携
+    
+  level_4: # 重大
+    - 新技術導入推奨
+    - 研究方針変更
+    - 特許出願
+
+ai_agents:
+  - name: AI Safety Researcher
+    role: lead
+    capabilities:
+      - AI安全性研究
+      - リスク評価
+      - 倫理レビュー
+    focus_areas:
+      - 敵対的攻撃防御
+      - モデル解釈可能性
+      - バイアス軽減
+      
+  - name: Adversarial ML Specialist
+    role: specialist
+    capabilities:
+      - 敵対的ML研究
+      - 攻撃手法分析
+      - 防御策開発
+    focus_areas:
+      - データポイズニング
+      - モデル回避攻撃
+      - 摂動耐性
+      
+  - name: Emerging Tech Scout
+    role: specialist
+    capabilities:
+      - 技術探索
+      - トレンド分析
+      - プロトタイピング
+    focus_areas:
+      - 新技術監視
+      - スタートアップ動向
+      - 学術論文
+
+collaboration_rules:
+  with_architecture:
+    - 新技術導入検討
+    - PoC実施支援
+    
+  with_security:
+    - 新脅威対策
+    - 脆弱性研究
+    
+  with_data:
+    - ML技術共有
+    - 実験データ提供
+
+metrics:
+  - name: research_papers_reviewed
+    target: "> 20/month"
+    alert: "< 10/month"
+    
+  - name: prototypes_developed
+    target: "> 2/month"
+    alert: "0"
+    
+  - name: tech_adoption_rate
+    target: "> 30%"
+    alert: "< 10%"
+    
+  - name: innovation_index
+    target: "+10% YoY"
+    alert: "-5% YoY"
+
+improvement_areas:
+  - 自動論文監視
+  - 実験自動化
+  - ナレッジベース構築
+  - 外部研究協力
