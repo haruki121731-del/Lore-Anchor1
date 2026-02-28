@@ -1,0 +1,13 @@
+# Core dependencies
+Pillow>=10.0.0
+numpy>=1.24.0
+
+# Storage & Queue
+boto3>=1.28.0
+redis>=5.0.0
+
+# API clients
+requests>=2.31.0
+
+# C2PA (optional - can be added later)
+# c2pa-python>=0.2.0
