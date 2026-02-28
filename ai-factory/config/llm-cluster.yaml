@@ -1,0 +1,280 @@
+# AI Development Factory - LLM Cluster Configuration
+# ローカルLLM並列実行クラスター設定
+
+cluster:
+  name: lore-anchor-ai-factory
+  version: "1.0.0"
+  
+  # オーケストレーター設定
+  orchestrator:
+    host: localhost
+    port: 8090
+    api_version: v1
+    
+  # キュー設定
+  queue:
+    type: redis
+    host: localhost
+    port: 6379
+    db: 0
+    max_queue_size: 10000
+    
+  # モニタリング
+  monitoring:
+    enabled: true
+    prometheus_port: 9090
+    grafana_enabled: true
+    log_level: INFO
+
+# GPUワーカー設定
+workers:
+  # Tier 1: 高性能層（複雑なタスク）
+  tier_1:
+    - id: worker-t1-01
+      host: localhost
+      port: 11434
+      gpu: RTX_4090
+      vram_gb: 24
+      max_concurrent: 4
+      models:
+        - qwen2.5-coder:32b-q4
+        - deepseek-coder:33b-q4
+        - mixtral:8x7b-q4
+      priority: high
+      
+    - id: worker-t1-02
+      host: localhost
+      port: 11435
+      gpu: RTX_4090
+      vram_gb: 24
+      max_concurrent: 4
+      models:
+        - qwen2.5-coder:32b-q4
+        - deepseek-coder:33b-q4
+        - mixtral:8x7b-q4
+      priority: high
+  
+  # Tier 2: 標準層（一般的な開発タスク）
+  tier_2:
+    - id: worker-t2-01
+      host: localhost
+      port: 11436
+      gpu: RTX_3090
+      vram_gb: 24
+      max_concurrent: 6
+      models:
+        - qwen2.5-coder:14b-q5
+        - codellama:13b-code-q5
+        - deepseek-coder:16b-q5
+      priority: normal
+      
+    - id: worker-t2-02
+      host: localhost
+      port: 11437
+      gpu: RTX_4080
+      vram_gb: 16
+      max_concurrent: 6
+      models:
+        - qwen2.5-coder:14b-q5
+        - codellama:13b-code-q5
+        - deepseek-coder:16b-q5
+      priority: normal
+      
+    - id: worker-t2-03
+      host: localhost
+      port: 11438
+      gpu: RTX_3090
+      vram_gb: 24
+      max_concurrent: 6
+      models:
+        - qwen2.5-coder:14b-q5
+        - codellama:13b-code-q5
+        - deepseek-coder:16b-q5
+      priority: normal
+  
+  # Tier 3: 軽量層（単純なタスク）
+  tier_3:
+    - id: worker-t3-01
+      host: localhost
+      port: 11439
+      gpu: RTX_4070
+      vram_gb: 12
+      max_concurrent: 8
+      models:
+        - qwen2.5-coder:7b-q4_K_M
+        - codellama:7b-code-q4
+        - phi4:14b-q4
+      priority: low
+      
+    - id: worker-t3-02
+      host: localhost
+      port: 11440
+      gpu: RTX_4060_Ti
+      vram_gb: 16
+      max_concurrent: 8
+      models:
+        - qwen2.5-coder:7b-q4_K_M
+        - codellama:7b-code-q4
+        - phi4:14b-q4
+      priority: low
+
+# モデル設定
+models:
+  fast_tier:
+    qwen2.5-coder:7b-q4_K_M:
+      context_length: 32768
+      temperature: 0.7
+      vram_required_gb: 6
+      avg_tokens_per_sec: 150
+      quality_score: 75
+      
+    codellama:7b-code-q4:
+      context_length: 16384
+      temperature: 0.7
+      vram_required_gb: 6
+      avg_tokens_per_sec: 140
+      quality_score: 72
+      
+    phi4:14b-q4:
+      context_length: 16384
+      temperature: 0.7
+      vram_required_gb: 9
+      avg_tokens_per_sec: 100
+      quality_score: 78
+      
+  balanced_tier:
+    qwen2.5-coder:14b-q5:
+      context_length: 32768
+      temperature: 0.7
+      vram_required_gb: 12
+      avg_tokens_per_sec: 80
+      quality_score: 85
+      
+    codellama:13b-code-q5:
+      context_length: 16384
+      temperature: 0.7
+      vram_required_gb: 11
+      avg_tokens_per_sec: 70
+      quality_score: 82
+      
+    deepseek-coder:16b-q5:
+      context_length: 16384
+      temperature: 0.7
+      vram_required_gb: 13
+      avg_tokens_per_sec: 75
+      quality_score: 88
+      
+  powerful_tier:
+    qwen2.5-coder:32b-q4:
+      context_length: 32768
+      temperature: 0.7
+      vram_required_gb: 22
+      avg_tokens_per_sec: 40
+      quality_score: 92
+      
+    codellama:34b-code-q4:
+      context_length: 16384
+      temperature: 0.7
+      vram_required_gb: 22
+      avg_tokens_per_sec: 35
+      quality_score: 88
+      
+    deepseek-coder:33b-q4:
+      context_length: 16384
+      temperature: 0.7
+      vram_required_gb: 22
+      avg_tokens_per_sec: 38
+      quality_score: 90
+
+# タスクルーティング設定
+routing:
+  # タスク分類ルール
+  classification:
+    patterns:
+      ui_component:
+        keywords: ["component", "UI", "button", "form", "modal", "card", "React", "Vue"]
+        difficulty: easy
+        model_tier: fast
+        
+      styling:
+        keywords: ["CSS", "Tailwind", "styled", "theme", "responsive", "layout"]
+        difficulty: easy
+        model_tier: fast
+        
+      state_management:
+        keywords: ["redux", "store", "context", "hook", "state", "zustand"]
+        difficulty: medium
+        model_tier: balanced
+        
+      api_endpoint:
+        keywords: ["endpoint", "API", "route", "controller", "handler", "REST"]
+        difficulty: easy
+        model_tier: fast
+        
+      database:
+        keywords: ["migration", "schema", "query", "index", "transaction", "SQL"]
+        difficulty: medium
+        model_tier: balanced
+        
+      security:
+        keywords: ["auth", "JWT", "encryption", "vulnerability", "XSS", "security"]
+        difficulty: hard
+        model_tier: powerful
+        
+      kubernetes:
+        keywords: ["k8s", "deployment", "pod", "service", "ingress", "helm"]
+        difficulty: hard
+        model_tier: powerful
+        
+      system_design:
+        keywords: ["architecture", "design pattern", "scalability", "microservices"]
+        difficulty: expert
+        model_tier: powerful
+  
+  # 負荷分散戦略
+  load_balancing:
+    strategy: adaptive  # round_robin, least_loaded, model_affinity, adaptive
+    health_check_interval: 30
+    retry_attempts: 3
+    
+  # フォールバック設定
+  fallback:
+    enabled: true
+    timeout_seconds: 60
+    max_retries: 2
+    fallback_model: qwen2.5-coder:14b-q5
+
+# 品質管理設定
+quality_control:
+  enabled: true
+  stages:
+    - syntax_check
+    - static_analysis
+    - test_execution
+    - semantic_review
+  
+  thresholds:
+    min_quality_score: 80
+    max_syntax_errors: 0
+    test_coverage_min: 70
+  
+  # 自己修正
+  self_correction:
+    enabled: true
+    max_attempts: 3
+    use_stronger_model: true
+
+# コスト最適化
+cost_optimization:
+  spot_instances:
+    enabled: true
+    provider: vast_ai  # vast_ai, lambda_labs, runpod
+    max_spot_price_per_hour: 0.50
+    
+  auto_scaling:
+    enabled: true
+    min_workers: 3
+    max_workers: 20
+    scale_up_threshold: 0.8
+    scale_down_threshold: 0.3
+    cooldown_minutes: 10

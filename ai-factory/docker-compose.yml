@@ -1,0 +1,121 @@
+# AI Development Factory - Docker Compose
+# ローカルLLM並列実行クラスター
+
+version: '3.8'
+
+services:
+  # Redis Task Queue
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # LLM Router / Orchestrator
+  router:
+    build:
+      context: .
+      dockerfile: Dockerfile.router
+    ports:
+      - "8090:8090"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./config:/app/config
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Prometheus for monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+
+  # Grafana for dashboards
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana:/etc/grafana/provisioning
+    depends_on:
+      - prometheus
+
+  # Tier 1 Workers (High Performance)
+  # 注: 実際のGPUマシンでは、これらは別のホストで動作
+  
+  # worker-t1-01:
+  #   image: ollama/ollama:latest
+  #   runtime: nvidia
+  #   environment:
+  #     - OLLAMA_HOST=0.0.0.0:11434
+  #   volumes:
+  #     - ollama_t1_01:/root/.ollama
+  #   ports:
+  #     - "11434:11434"
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+
+  # Tier 2 Workers (Standard)
+  # worker-t2-01:
+  #   image: ollama/ollama:latest
+  #   ...
+
+  # Tier 3 Workers (Lightweight)
+  # worker-t3-01:
+  #   image: ollama/ollama:latest
+  #   ...
+
+  # co-vibe integration
+  co-vibe:
+    build:
+      context: .
+      dockerfile: Dockerfile.covibe
+    environment:
+      - CO_VIBE_STRATEGY=auto
+      - CO_VIBE_PORT=8091
+      - OLLAMA_HOST=host.docker.internal:11434
+    ports:
+      - "8091:8091"
+    volumes:
+      - ./co-vibe-config:/root/.config/co-vibe
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  redis_data:
+  prometheus_data:
+  grafana_data:
+  # ollama_t1_01:
+  # ollama_t2_01:
+  # ollama_t3_01:
+
+networks:
+  default:
+    driver: bridge
