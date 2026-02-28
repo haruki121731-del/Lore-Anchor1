@@ -14,7 +14,8 @@ import { AnimatePresence, motion } from "framer-motion";
 import { ArrowRight, ImagePlus, Share2, ShieldCheck, Twitter } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { getImage, getTaskStatus, trackDownload, uploadImage } from "@/lib/api/images";
-import { getSupabaseClient } from "@/lib/supabase/client";
+import { normalizeUiError } from "@/lib/errors/ui";
+import { getValidAccessToken, withAccessTokenRetry } from "@/lib/supabase/client";
 
 export type AppState = "landing" | "idle" | "processing" | "success";
 
@@ -32,19 +33,6 @@ type EnsureSessionTokenOptions = {
   redirectIfMissing?: boolean;
 };
 
-function isAuthError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-
-  const message = error.message.toLowerCase();
-  return (
-    message.includes("401") ||
-    message.includes("missing bearer token") ||
-    message.includes("invalid or expired token")
-  );
-}
-
 export default function LoreAnchorFlow(): JSX.Element {
   const router = useRouter();
   const [appState, setAppState] = useState<AppState>("landing");
@@ -56,7 +44,6 @@ export default function LoreAnchorFlow(): JSX.Element {
   const [protectedImageBlob, setProtectedImageBlob] = useState<Blob | null>(null);
   const [originalFileName, setOriginalFileName] = useState("my_art");
   const [currentImageId, setCurrentImageId] = useState<string | null>(null);
-  const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [isDragActive, setIsDragActive] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -144,38 +131,16 @@ export default function LoreAnchorFlow(): JSX.Element {
     async (options: EnsureSessionTokenOptions = {}): Promise<string | null> => {
       const { forceRefresh = false, redirectIfMissing = false } = options;
       try {
-        const supabase = getSupabaseClient();
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-
-        if (!session) {
-          if (redirectIfMissing) {
-            showToast("ログインが必要なためログイン画面へ移動します。", 2200);
-            redirectToLogin();
-          } else {
-            showToast("実加工にはログインが必要です。", 3000);
-          }
+        return await getValidAccessToken({ forceRefresh });
+      } catch (error) {
+        const uiError = normalizeUiError(error, "auth");
+        if (redirectIfMissing && uiError.category === "auth") {
+          showToast("ログインが必要なためログイン画面へ移動します。", 2200);
+          redirectToLogin();
           return null;
         }
-
-        const nowInSeconds = Math.floor(Date.now() / 1000);
-        const expiresSoon =
-          typeof session.expires_at === "number" && session.expires_at <= nowInSeconds + 60;
-        const shouldRefresh = forceRefresh || !session.access_token || expiresSoon;
-
-        if (shouldRefresh) {
-          const { data, error } = await supabase.auth.refreshSession();
-          if (error || !data.session?.access_token) {
-            showToast("セッション更新に失敗しました。再ログインしてください。", 3500);
-            return null;
-          }
-          return data.session.access_token;
-        }
-
-        return session.access_token;
-      } catch {
-        showToast("ログイン状態の確認に失敗しました。", 3000);
+        showToast(uiError.message, 3000);
+        console.error("[LoreAnchorFlow] session check failed", error);
         return null;
       }
     },
@@ -183,10 +148,9 @@ export default function LoreAnchorFlow(): JSX.Element {
   );
 
   const startStatusPolling = useCallback(
-    (imageId: string, initialToken: string, fallbackBlob: Blob, runId: number): void => {
+    (imageId: string, fallbackBlob: Blob, runId: number): void => {
       clearProcessingMonitors();
       let inFlight = false;
-      let activeToken = initialToken;
 
       const pollStatus = async (): Promise<void> => {
         if (inFlight || runId !== processingRunRef.current) {
@@ -195,34 +159,17 @@ export default function LoreAnchorFlow(): JSX.Element {
 
         inFlight = true;
         try {
-          let taskStatus;
-          try {
-            taskStatus = await getTaskStatus(imageId, activeToken);
-          } catch (error) {
-            if (!isAuthError(error)) {
-              throw error;
-            }
-
-            const refreshed = await ensureSessionToken({ forceRefresh: true });
-            if (!refreshed) {
-              resetToIdleWithError("セッションが切れました。再ログイン後に再試行してください。");
-              return;
-            }
-
-            activeToken = refreshed;
-            setSessionToken(refreshed);
-            taskStatus = await getTaskStatus(imageId, activeToken);
-          }
+          const taskStatus = await withAccessTokenRetry((accessToken) =>
+            getTaskStatus(imageId, accessToken)
+          );
 
           if (runId !== processingRunRef.current) {
             return;
           }
 
           if (taskStatus.status === "failed") {
-            const message = taskStatus.error_log
-              ? `画像の保護処理に失敗しました: ${taskStatus.error_log}`
-              : "画像の保護処理に失敗しました。再アップロードしてください。";
-            resetToIdleWithError(message);
+            resetToIdleWithError("処理に失敗しました。もう一度お試しください。");
+            console.error("[LoreAnchorFlow] processing failed", taskStatus.error_log);
             return;
           }
 
@@ -232,24 +179,7 @@ export default function LoreAnchorFlow(): JSX.Element {
 
           clearProcessingMonitors();
 
-          let image;
-          try {
-            image = await getImage(imageId, activeToken);
-          } catch (error) {
-            if (!isAuthError(error)) {
-              throw error;
-            }
-
-            const refreshed = await ensureSessionToken({ forceRefresh: true });
-            if (!refreshed) {
-              resetToIdleWithError("セッションが切れました。再ログイン後に再試行してください。");
-              return;
-            }
-
-            activeToken = refreshed;
-            setSessionToken(refreshed);
-            image = await getImage(imageId, activeToken);
-          }
+          const image = await withAccessTokenRetry((accessToken) => getImage(imageId, accessToken));
 
           if (runId !== processingRunRef.current) {
             return;
@@ -278,13 +208,14 @@ export default function LoreAnchorFlow(): JSX.Element {
           const successPreviewUrl = URL.createObjectURL(finalBlob);
           replaceProtectedPreviewUrl(successPreviewUrl);
           setProtectedImageBlob(finalBlob);
-          setSessionToken(activeToken);
           setAppState("success");
-        } catch {
+        } catch (error) {
           if (runId !== processingRunRef.current) {
             return;
           }
-          resetToIdleWithError("処理状況の取得に失敗しました。再アップロードしてください。");
+          const uiError = normalizeUiError(error, "processing");
+          resetToIdleWithError(uiError.message);
+          console.error("[LoreAnchorFlow] polling failed", error);
         } finally {
           inFlight = false;
         }
@@ -298,14 +229,13 @@ export default function LoreAnchorFlow(): JSX.Element {
         if (runId !== processingRunRef.current) {
           return;
         }
-        resetToIdleWithError("処理がタイムアウトしました。再アップロードしてください。");
+        resetToIdleWithError("処理が長引いています。もう一度お試しください。");
       }, PROCESSING_TIMEOUT_MS);
 
       void pollStatus();
     },
     [
       clearProcessingMonitors,
-      ensureSessionToken,
       replaceProtectedPreviewUrl,
       resetToIdleWithError,
       showToast,
@@ -345,42 +275,26 @@ export default function LoreAnchorFlow(): JSX.Element {
       setProtectedImageBlob(file);
       setProtectedDownloadUrl(null);
       setCurrentImageId(null);
-      setSessionToken(token);
       setAppState("processing");
 
-      let activeToken = token;
-
       try {
-        let uploadResult;
-        try {
-          uploadResult = await uploadImage(file, activeToken);
-        } catch (error) {
-          if (!isAuthError(error)) {
-            throw error;
-          }
-
-          const refreshed = await ensureSessionToken({ forceRefresh: true });
-          if (!refreshed) {
-            resetToIdleWithError("セッションが切れました。再ログイン後に再試行してください。");
-            return;
-          }
-
-          activeToken = refreshed;
-          setSessionToken(refreshed);
-          uploadResult = await uploadImage(file, activeToken);
-        }
+        const uploadResult = await withAccessTokenRetry((accessToken) =>
+          uploadImage(file, accessToken)
+        );
 
         if (runId !== processingRunRef.current) {
           return;
         }
 
         setCurrentImageId(uploadResult.image_id);
-        startStatusPolling(uploadResult.image_id, activeToken, file, runId);
-      } catch {
+        startStatusPolling(uploadResult.image_id, file, runId);
+      } catch (error) {
         if (runId !== processingRunRef.current) {
           return;
         }
-        resetToIdleWithError("アップロードに失敗しました。再アップロードしてください。");
+        const uiError = normalizeUiError(error, "upload");
+        resetToIdleWithError(uiError.message);
+        console.error("[LoreAnchorFlow] upload failed", error);
       }
     },
     [
@@ -404,7 +318,6 @@ export default function LoreAnchorFlow(): JSX.Element {
     setAppState("idle");
     const token = await ensureSessionToken();
     if (token) {
-      setSessionToken(token);
       showToast("ログインが完了しました。画像を選択してください。", 2600);
     }
 
@@ -443,18 +356,14 @@ export default function LoreAnchorFlow(): JSX.Element {
 
   const handleDropzoneClick = useCallback((): void => {
     void (async () => {
-      const token = sessionToken ?? (await ensureSessionToken({ redirectIfMissing: true }));
+      const token = await ensureSessionToken({ redirectIfMissing: true });
       if (!token) {
         return;
       }
 
-      if (!sessionToken) {
-        setSessionToken(token);
-      }
-
       fileInputRef.current?.click();
     })();
-  }, [ensureSessionToken, sessionToken]);
+  }, [ensureSessionToken]);
 
   const handleDragOver = useCallback((event: DragEvent<HTMLDivElement>): void => {
     event.preventDefault();
@@ -508,11 +417,13 @@ export default function LoreAnchorFlow(): JSX.Element {
         downloadLabelTimerRef.current = null;
       }, 1500);
 
-      if (currentImageId && sessionToken) {
+      if (currentImageId) {
         try {
-          await trackDownload(currentImageId, sessionToken);
-        } catch {
-          showToast("ダウンロード記録の送信に失敗しました。", 3000);
+          await withAccessTokenRetry((accessToken) => trackDownload(currentImageId, accessToken));
+        } catch (error) {
+          const uiError = normalizeUiError(error, "dashboard");
+          showToast(uiError.message, 3000);
+          console.error("[LoreAnchorFlow] track download failed", error);
         }
       }
     } catch {
@@ -532,7 +443,6 @@ export default function LoreAnchorFlow(): JSX.Element {
     getProtectedBlobOrNotify,
     originalFileName,
     protectedDownloadUrl,
-    sessionToken,
     showToast,
   ]);
 

@@ -2,11 +2,11 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 function sanitizeNextPath(nextRaw: string | null): string {
-  if (!nextRaw) return "/dashboard";
-  if (!nextRaw.startsWith("/")) return "/dashboard";
-  if (nextRaw.startsWith("//")) return "/dashboard";
-  if (nextRaw === "/login" || nextRaw.startsWith("/login?")) return "/dashboard";
-  if (nextRaw === "/auth/callback" || nextRaw.startsWith("/auth/callback?")) return "/dashboard";
+  if (!nextRaw) return "/";
+  if (!nextRaw.startsWith("/")) return "/";
+  if (nextRaw.startsWith("//")) return "/";
+  if (nextRaw === "/login" || nextRaw.startsWith("/login?")) return "/";
+  if (nextRaw === "/auth/callback" || nextRaw.startsWith("/auth/callback?")) return "/";
   return nextRaw;
 }
 

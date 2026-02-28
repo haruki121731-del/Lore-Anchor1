@@ -1,10 +1,12 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import Link from "next/link";
 import { useDropzone } from "react-dropzone";
-import { getSupabaseClient } from "@/lib/supabase/client";
 import { uploadImage } from "@/lib/api/images";
 import type { UploadResponse } from "@/lib/api/types";
+import { normalizeUiError, type UiError } from "@/lib/errors/ui";
+import { withAccessTokenRetry } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 
@@ -14,7 +16,7 @@ interface ImageUploaderProps {
 
 export function ImageUploader({ onUploadComplete }: ImageUploaderProps) {
   const [progress, setProgress] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<UiError | null>(null);
   const [result, setResult] = useState<UploadResponse | null>(null);
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
 
@@ -29,29 +31,15 @@ export function ImageUploader({ onUploadComplete }: ImageUploaderProps) {
       setSelectedFileName(file.name);
 
       try {
-        const supabase = getSupabaseClient();
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-        if (!session) {
-          setError("ログイン状態が切れました。再ログインしてください。");
-          setProgress(null);
-          return;
-        }
-
-        const uploadResult = await uploadImage(
-          file,
-          session.access_token,
-          setProgress
+        const uploadResult = await withAccessTokenRetry((accessToken) =>
+          uploadImage(file, accessToken, setProgress)
         );
         setResult(uploadResult);
         onUploadComplete(uploadResult);
       } catch (err) {
-        setError(
-          err instanceof Error
-            ? err.message
-            : "アップロードに失敗しました。時間をおいて再試行してください。"
-        );
+        const uiError = normalizeUiError(err, "upload");
+        setError(uiError);
+        console.error("[ImageUploader] upload failed", err);
       } finally {
         setProgress(null);
       }
@@ -121,9 +109,20 @@ export function ImageUploader({ onUploadComplete }: ImageUploaderProps) {
       )}
 
       {error && (
-        <p className="rounded-lg border border-rose-300/30 bg-rose-500/10 p-3 text-center text-sm text-rose-200">
-          {error}
-        </p>
+        <div className="rounded-lg border border-rose-300/30 bg-rose-500/10 p-3 text-center text-sm text-rose-200">
+          <p>{error.message}</p>
+          {error.category === "auth" && (
+            <Link className="mt-2 inline-block text-xs underline" href="/login?next=/dashboard">
+              ログイン画面へ
+            </Link>
+          )}
+          {error.detail && (
+            <details className="mt-2 text-left text-xs text-rose-100/80">
+              <summary className="cursor-pointer text-center">くわしい情報</summary>
+              <p className="mt-1 break-words">{error.detail}</p>
+            </details>
+          )}
+        </div>
       )}
 
       {result && (

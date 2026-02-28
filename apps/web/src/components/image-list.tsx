@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import Link from "next/link";
 import type { ImageRecord, ImageStatus, TaskStatus } from "@/lib/api/types";
 import {
   deleteImage,
@@ -9,7 +10,8 @@ import {
   retryTask,
   trackDownload,
 } from "@/lib/api/images";
-import { getSupabaseClient } from "@/lib/supabase/client";
+import { normalizeUiError, type UiError } from "@/lib/errors/ui";
+import { withAccessTokenRetry } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -68,7 +70,7 @@ const PAGE_SIZE = 20;
 export function ImageList({ refreshKey }: ImageListProps) {
   const [images, setImages] = useState<ImageRecord[]>([]);
   const [taskStatusMap, setTaskStatusMap] = useState<Record<string, TaskStatus>>({});
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<UiError | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
@@ -78,17 +80,7 @@ export function ImageList({ refreshKey }: ImageListProps) {
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const mountedRef = useRef(true);
 
-  const getAccessToken = useCallback(async () => {
-    const supabase = getSupabaseClient();
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    if (!session) throw new Error("ログイン状態が切れました。再ログインしてください。");
-    return session.access_token;
-  }, []);
-
-  const fetchTaskStatuses = useCallback(async (records: ImageRecord[], token: string) => {
+  const fetchTaskStatuses = useCallback(async (records: ImageRecord[]) => {
     const targetIds = records
       .filter((img) => img.status === "failed" || img.status === "pending" || img.status === "processing")
       .map((img) => img.image_id);
@@ -101,9 +93,12 @@ export function ImageList({ refreshKey }: ImageListProps) {
     const pairs = await Promise.all(
       targetIds.map(async (imageId) => {
         try {
-          const status = await getTaskStatus(imageId, token);
+          const status = await withAccessTokenRetry((accessToken) =>
+            getTaskStatus(imageId, accessToken)
+          );
           return [imageId, status] as const;
-        } catch {
+        } catch (fetchError) {
+          console.error("[ImageList] task status fetch failed", fetchError);
           return [imageId, null] as const;
         }
       })
@@ -120,29 +115,31 @@ export function ImageList({ refreshKey }: ImageListProps) {
 
   const fetchImages = useCallback(async (targetPage: number = page) => {
     try {
-      const token = await getAccessToken();
-      const data = await listImages(token, targetPage, PAGE_SIZE);
+      const data = await withAccessTokenRetry((accessToken) =>
+        listImages(accessToken, targetPage, PAGE_SIZE)
+      );
       if (mountedRef.current) {
         setImages(data.images);
         setHasMore(data.has_more);
         setTotal(data.total);
         setError(null);
       }
-      await fetchTaskStatuses(data.images, token);
+      await fetchTaskStatuses(data.images);
     } catch (err) {
       if (mountedRef.current) {
-        setError(err instanceof Error ? err.message : "画像一覧の取得に失敗しました");
+        const uiError = normalizeUiError(err, "dashboard");
+        setError(uiError);
+        console.error("[ImageList] list fetch failed", err);
       }
     } finally {
       if (mountedRef.current) setLoading(false);
     }
-  }, [fetchTaskStatuses, getAccessToken, page]);
+  }, [fetchTaskStatuses, page]);
 
   const handleDelete = useCallback(async (imageId: string) => {
     try {
       setDeletingId(imageId);
-      const token = await getAccessToken();
-      await deleteImage(imageId, token);
+      await withAccessTokenRetry((accessToken) => deleteImage(imageId, accessToken));
       setImages((prev) => prev.filter((img) => img.image_id !== imageId));
       setTotal((prev) => Math.max(prev - 1, 0));
       setTaskStatusMap((prev) => {
@@ -151,33 +148,37 @@ export function ImageList({ refreshKey }: ImageListProps) {
         return next;
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "削除に失敗しました");
+      const uiError = normalizeUiError(err, "dashboard");
+      setError(uiError);
+      console.error("[ImageList] delete failed", err);
     } finally {
       setDeletingId(null);
     }
-  }, [getAccessToken]);
+  }, []);
 
   const handleRetry = useCallback(async (imageId: string) => {
     try {
       setRetryingId(imageId);
-      const token = await getAccessToken();
-      await retryTask(imageId, token);
+      await withAccessTokenRetry((accessToken) => retryTask(imageId, accessToken));
       setError(null);
       await fetchImages(page);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "再試行に失敗しました");
+      const uiError = normalizeUiError(err, "dashboard");
+      setError(uiError);
+      console.error("[ImageList] retry failed", err);
     } finally {
       setRetryingId(null);
     }
-  }, [fetchImages, getAccessToken, page]);
+  }, [fetchImages, page]);
 
   const handleDownload = useCallback(async (img: ImageRecord) => {
     if (!img.protected_url) return;
 
     try {
       setDownloadingId(img.image_id);
-      const token = await getAccessToken();
-      const tracked = await trackDownload(img.image_id, token);
+      const tracked = await withAccessTokenRetry((accessToken) =>
+        trackDownload(img.image_id, accessToken)
+      );
       setImages((prev) =>
         prev.map((item) =>
           item.image_id === img.image_id
@@ -186,7 +187,9 @@ export function ImageList({ refreshKey }: ImageListProps) {
         )
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "ダウンロード記録に失敗しました");
+      const uiError = normalizeUiError(err, "dashboard");
+      setError(uiError);
+      console.error("[ImageList] download track failed", err);
     } finally {
       const a = document.createElement("a");
       a.href = img.protected_url;
@@ -196,7 +199,7 @@ export function ImageList({ refreshKey }: ImageListProps) {
       a.click();
       setDownloadingId(null);
     }
-  }, [getAccessToken]);
+  }, []);
 
   useEffect(() => {
     setLoading(true);
@@ -232,7 +235,20 @@ export function ImageList({ refreshKey }: ImageListProps) {
   if (error) {
     return (
       <div className="py-8 text-center">
-        <p className="rounded-lg border border-rose-300/30 bg-rose-500/10 p-3 text-sm text-rose-200">{error}</p>
+        <div className="rounded-lg border border-rose-300/30 bg-rose-500/10 p-3 text-sm text-rose-200">
+          <p>{error.message}</p>
+          {error.category === "auth" && (
+            <Link className="mt-2 inline-block text-xs underline" href="/login?next=/dashboard">
+              ログイン画面へ
+            </Link>
+          )}
+          {error.detail && (
+            <details className="mt-2 text-left text-xs text-rose-100/80">
+              <summary className="cursor-pointer text-center">くわしい情報</summary>
+              <p className="mt-1 break-words">{error.detail}</p>
+            </details>
+          )}
+        </div>
         <Button
           variant="outline"
           size="sm"
