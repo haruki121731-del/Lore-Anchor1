@@ -346,7 +346,7 @@ Frontend ← GET /api/v1/tasks/{image_id}/status (5秒ポーリング)
 | Redis | Railway | `redis.railway.internal:6379` (内部) | 稼働中 |
 | Redis (公開) | Railway | `switchyard.proxy.rlwy.net:22395` | 稼働中 |
 | GPU Worker Image | GHCR | `ghcr.io/haruki121731-del/lore-anchor-worker:latest` | ビルド済み |
-| GPU Worker Runtime | SaladCloud | Container Group: `lore-anchor-worker` (RTX 4000+, 12GB) | 未完了 |
+| GPU Worker Runtime | SaladCloud | Container Group: `lore-anchor-worker0` (RTX 4000+, 12GB) | **稼働中** |
 | Database | Supabase | PostgreSQL | 稼働中 |
 | Object Storage | Cloudflare R2 | S3 互換 | 稼働中 |
 
@@ -359,13 +359,19 @@ Frontend ← GET /api/v1/tasks/{image_id}/status (5秒ポーリング)
 | Phase 1 | Infrastructure & GPU Worker | 完了 |
 | Phase 2 | Backend API & Redis Queue | 完了 |
 | Phase 3 | Frontend UX (Upload, Dashboard, Auth) | 完了 |
-| Phase 4 | Production Deployment | 一部未完了 |
+| Phase 4 | Production Deployment | **完了** |
 
 Phase 4 の詳細:
 - Railway (API + Redis): デプロイ済み
 - GHCR (Worker Image): ビルド・プッシュ済み
 - Vercel (Frontend): デプロイ済み
-- **SaladCloud (GPU Worker): 未完了**
+- **SaladCloud (GPU Worker): 稼働中** (`lore-anchor-worker0`, Container Group `default`, status=running)
+
+### 直近の修正 (2026-02)
+
+- **PR #16**: `ImageRecord.image_id` シリアライズバグ修正 — `Field(alias="id")` → `Field(validation_alias="id")` でフロントエンドの `image_id` キー期待に対応
+- **PR #17**: `tests/e2e_local_test.py` の `img["id"]` → `img["image_id"]` 修正
+- **PR #11**: クローズ（main にリグレッションをもたらす古いブランチ）
 
 ---
 
@@ -373,9 +379,9 @@ Phase 4 の詳細:
 
 ### 残タスク
 
-1. SaladCloud Container Group の本番設定と安定稼働確認
-2. 本番用 C2PA 証明書の取得と環境変数への設定（現在は dev 自己署名証明書）
-3. GPU 環境での E2E 統合テスト
+1. 本番用 C2PA 証明書の取得と環境変数への設定（現在は dev 自己署名証明書）
+2. 実画像を使った GPU 環境での E2E 統合テスト（フロントエンドから画像アップロード → `status=completed` まで）
+3. SaladCloud Worker の自動再起動設定確認（`autostart_policy: false` のため手動起動が必要）
 
 ### 未解決の技術的課題
 

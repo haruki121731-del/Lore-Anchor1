@@ -13,7 +13,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from apps.api.core.config import get_settings
-from apps.api.routers import billing, images
+from apps.api.routers import billing, images, subscriptions
 from apps.api.routers.images import tasks_router
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -61,7 +61,8 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # ty
 
 _default_origins = [
     "http://localhost:3000",              # Next.js dev server
-    "https://lore-anchor-web.vercel.app", # Vercel production
+    "https://lore-anchor1-who4.vercel.app", # Vercel production (current)
+    "https://lore-anchor-web.vercel.app", # Vercel production (legacy)
     "https://lore-anchor.com",            # custom domain (future)
 ]
 _extra = get_settings().CORS_ORIGINS
@@ -82,6 +83,7 @@ app.add_middleware(
 app.include_router(images.router, prefix="/api/v1")
 app.include_router(tasks_router, prefix="/api/v1")
 app.include_router(billing.router, prefix="/api/v1")
+app.include_router(subscriptions.router, prefix="/api/v1")
 
 
 # ------------------------------------------------------------------

@@ -1,0 +1,105 @@
+# Growth Team Configuration
+# AIエージェント: 成長チーム
+
+name: Growth Team
+identifier: growth
+code: 📈
+
+mission: |
+  データ駆動でユーザー獲得と事業成長を加速し、
+  クリエイター保護の価値を世界中に広める。
+
+responsibilities:
+  - 市場動向の監視と分析
+  - マーケティング戦略の自動最適化
+  - コンバージョンファネルの改善
+  - ユーザーセグメント分析
+  - A/Bテスト設計・実行
+  - コンテンツ戦略
+
+decision_authority:
+  level_2: # チーム内
+    - コンテンツ投稿スケジュール
+    - ソーシャルメディア投稿
+    - メールマーケティング
+    - 小規模A/Bテスト
+    
+  level_3: # 横断
+    - 製品ページ変更（マーケティング目的）
+    - オンボーディングフロー変更
+    - 価格テスト
+    
+  level_4: # 重大
+    - 大規模マーケティングキャンペーン
+    - 価格戦略変更
+    - 新市場参入
+
+ai_agents:
+  - name: Market Analyst
+    role: lead
+    capabilities:
+      - 市場調査
+      - 競合分析
+      - トレンド予測
+    focus_areas:
+      - クリエイター経済動向
+      - AI規制動向
+      - 競合製品分析
+      
+  - name: User Acquisition Specialist
+    role: specialist
+    capabilities:
+      - 獲得チャネル最適化
+      - 広告運用
+      - SEO/ASO
+    focus_areas:
+      - コストパーユーザー最適化
+      - チャネルダイバーシフィケーション
+      - ウィルス係数改善
+      
+  - name: Retention Optimizer
+    role: specialist
+    capabilities:
+      - ユーザー行動分析
+      - リテンション戦略
+      - ライフタイムバリュー最大化
+    focus_areas:
+      - 離脱予防
+      - エンゲージメント向上
+      - アップセル/クロスセル
+
+collaboration_rules:
+  with_content:
+    - コンテンツ戦略連携
+    - パフォーマンスフィードバック
+    
+  with_product:
+    - ユーザーニーズ伝達
+    - 機能要望
+    
+  with_data:
+    - 効果測定
+    - 分析協力
+
+metrics:
+  - name: monthly_active_users
+    target: +20% MoM
+    alert: < +5% MoM
+    
+  - name: conversion_rate
+    target: "> 15%"
+    alert: "< 8%"
+    
+  - name: customer_acquisition_cost
+    target: "< $10"
+    alert: "> $30"
+    
+  - name: retention_d7
+    target: "> 30%"
+    alert: "< 15%"
+
+improvement_areas:
+  - パーソナライゼーション
+  - レコメンデーションシステム
+  - 自動コンテンツ最適化
+  - 予測的ユーザーセグメント

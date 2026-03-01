@@ -1,0 +1,151 @@
+name: AI Consensus Builder
+
+on:
+  issues:
+    types: [opened, labeled]
+  issue_comment:
+    types: [created]
+  schedule:
+    - cron: '0 */6 * * *'  # 6時間ごとにチェック
+
+env:
+  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  analyze-proposal:
+    runs-on: ubuntu-latest
+    if: contains(github.event.issue.labels.*.name, 'proposal')
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Analyze proposal
+        id: analyze
+        run: |
+          echo "Analyzing proposal #${{ github.event.issue.number }}"
+          
+          # 提案内容を取得
+          ISSUE_BODY="${{ github.event.issue.body }}"
+          
+          # 関係チームを特定
+          TEAMS=$(echo "$ISSUE_BODY" | grep -oP '\[x\] .* Team' | sed 's/- \[x\] //')
+          
+          echo "teams<<EOF" >> $GITHUB_OUTPUT
+          echo "$TEAMS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+      
+      - name: Request team reviews
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue_number = context.issue.number;
+            const teams = `${{ steps.analyze.outputs.teams }}`.split('\n').filter(t => t);
+            
+            // 各チームにメンション
+            const mentions = teams.map(t => `@lore-anchor/${t.toLowerCase().replace(' ', '-')}`).join(' ');
+            
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue_number,
+              body: `## 🏛️ 意思決定プロセス開始\n\nこの提案について、以下のチームのレビューを求めます:\n\n${mentions}\n\n**期限:** 72時間以内\n\n### レビュー方法\nこのIssueにコメントしてください:\n\`\`\`\nTeam: [チーム名]\nVote: [approve / reject / abstain]\nComments: [コメント]\n\`\`\``
+            });
+            
+            // ラベルを更新
+            github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue_number,
+              labels: ['under-review']
+            });
+
+  check-consensus:
+    runs-on: ubuntu-latest
+    if: contains(github.event.issue.labels.*.name, 'under-review')
+    
+    steps:
+      - name: Check votes
+        id: check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue_number = context.issue.number;
+            
+            // コメントを取得
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue_number
+            });
+            
+            // 投票をカウント
+            const votes = {};
+            comments.data.forEach(comment => {
+              const body = comment.body;
+              if (body.includes('Team:') && body.includes('Vote:')) {
+                const team = body.match(/Team:\s*(.+)/)?.[1]?.trim();
+                const vote = body.match(/Vote:\s*(.+)/)?.[1]?.trim();
+                if (team && vote) {
+                  votes[team] = vote;
+                }
+              }
+            });
+            
+            // 合意判定
+            const total = Object.keys(votes).length;
+            const approves = Object.values(votes).filter(v => v === 'approve').length;
+            const rejects = Object.values(votes).filter(v => v === 'reject').length;
+            
+            console.log(`Votes: ${approves} approve, ${rejects} reject, ${total - approves - rejects} abstain`);
+            
+            // 70%以上の賛成で承認
+            const consensusReached = total > 0 && (approves / total) >= 0.7;
+            
+            return {
+              consensus: consensusReached,
+              votes: votes,
+              summary: `${approves} approve, ${rejects} reject`
+            };
+      
+      - name: Update issue on consensus
+        if: steps.check.outputs.consensus == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue_number = context.issue.number;
+            
+            // 承認コメント
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue_number,
+              body: `## ✅ 合意形成完了\n\nこの提案は**承認されました**。\n\n**投票結果:** ${process.env.VOTE_SUMMARY}\n\n次のステップ:\n1. 実装Issueの作成\n2. 担当チームのアサイン\n3. スケジュール設定`
+            });
+            
+            // ラベル更新
+            github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue_number,
+              labels: ['approved']
+            });
+            
+            github.rest.issues.removeLabel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue_number,
+              name: 'under-review'
+            });
+
+  auto-improvement:
+    runs-on: ubuntu-latest
+    if: contains(github.event.issue.labels.*.name, 'improvement') && contains(github.event.issue.labels.*.name, 'auto-approved')
+    
+    steps:
+      - name: Auto-implement improvement
+        run: |
+          echo "Auto-implementing improvement..."
+          # ここに自動実装ロジックを追加
+          # 例: 軽微なリファクタリング、設定変更など

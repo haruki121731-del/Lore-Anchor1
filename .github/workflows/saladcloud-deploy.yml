@@ -1,0 +1,153 @@
+name: 🥗 Deploy to SaladCloud
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        type: choice
+        required: true
+        options:
+          - deploy        # Create or update Container Group
+          - start         # Start stopped Container Group
+          - stop          # Stop Container Group
+          - status        # Check Container Group status
+  push:
+    branches: [main]
+    paths:
+      - 'workers/gpu-worker/**'
+      - '.github/workflows/saladcloud-deploy.yml'
+
+env:
+  SALAD_ORG_NAME: ${{ secrets.SALAD_ORG_NAME || 'lore-anchor' }}
+  SALAD_PROJECT_NAME: ${{ secrets.SALAD_PROJECT_NAME || 'production' }}
+  CONTAINER_GROUP_NAME: lore-anchor-worker
+  IMAGE: ghcr.io/haruki121731-del/lore-anchor-worker:latest
+
+jobs:
+  deploy:
+    name: Deploy GPU Worker to SaladCloud
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'deploy')
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Check SaladCloud API key
+        run: |
+          if [ -z "${{ secrets.SALAD_API_KEY }}" ]; then
+            echo "❌ SALAD_API_KEY secret not set!"
+            echo "Go to: https://portal.salad.com → API Key"
+            echo "Then: GitHub repo Settings → Secrets → Add SALAD_API_KEY"
+            exit 1
+          fi
+          echo "✅ SALAD_API_KEY is set"
+
+      - name: Get current Container Group status
+        id: current
+        continue-on-error: true
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Salad-Api-Key: ${{ secrets.SALAD_API_KEY }}" \
+            "https://api.salad.com/api/v1/organizations/${{ env.SALAD_ORG_NAME }}/projects/${{ env.SALAD_PROJECT_NAME }}/containers/${{ env.CONTAINER_GROUP_NAME }}")
+          echo "status=$STATUS" >> $GITHUB_OUTPUT
+          echo "HTTP status: $STATUS"
+
+      - name: Create Container Group (if not exists)
+        if: steps.current.outputs.status == '404'
+        run: |
+          curl -s -X POST \
+            -H "Salad-Api-Key: ${{ secrets.SALAD_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            "https://api.salad.com/api/v1/organizations/${{ env.SALAD_ORG_NAME }}/projects/${{ env.SALAD_PROJECT_NAME }}/containers" \
+            -d '{
+              "name": "${{ env.CONTAINER_GROUP_NAME }}",
+              "display_name": "Lore-Anchor GPU Worker",
+              "container": {
+                "image": "${{ env.IMAGE }}",
+                "resources": {
+                  "cpu": 4,
+                  "memory": 12288,
+                  "gpu_classes": ["rtx_4000_ada"],
+                  "storage_amount": 10737418240
+                },
+                "environment_variables": {
+                  "REDIS_URL": "${{ secrets.REDIS_URL }}",
+                  "SUPABASE_URL": "${{ secrets.SUPABASE_URL }}",
+                  "SUPABASE_SERVICE_ROLE_KEY": "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}",
+                  "R2_ACCOUNT_ID": "${{ secrets.R2_ACCOUNT_ID }}",
+                  "R2_ACCESS_KEY_ID": "${{ secrets.R2_ACCESS_KEY_ID }}",
+                  "R2_SECRET_ACCESS_KEY": "${{ secrets.R2_SECRET_ACCESS_KEY }}",
+                  "R2_BUCKET_NAME": "${{ secrets.R2_BUCKET_NAME }}",
+                  "R2_PUBLIC_DOMAIN": "${{ secrets.R2_PUBLIC_DOMAIN }}",
+                  "MIST_EPSILON": "8",
+                  "MIST_STEPS": "3",
+                  "HEALTH_PORT": "8080"
+                },
+                "logging": {
+                  "http": {
+                    "host": "logs.lore-anchor.com",
+                    "port": 443,
+                    "user": "${{ secrets.LOG_HTTP_USER }}",
+                    "password": "${{ secrets.LOG_HTTP_PASSWORD }}",
+                    "path": "/salad-worker",
+                    "format": "json",
+                    "headers": [],
+                    "compression": "none"
+                  }
+                }
+              },
+              "autostart_policy": true,
+              "restart_policy": "on_failure",
+              "replicas": 1,
+              "liveness_probe": {
+                "http": {
+                  "path": "/health",
+                  "port": 8080,
+                  "scheme": "http"
+                },
+                "initial_delay_seconds": 30,
+                "period_seconds": 30,
+                "timeout_seconds": 10,
+                "success_threshold": 1,
+                "failure_threshold": 3
+              },
+              "country_codes": ["JP", "US", "GB", "DE"]
+            }' | python3 -m json.tool
+
+      - name: Update Container Group image (if exists)
+        if: steps.current.outputs.status == '200'
+        run: |
+          echo "Updating existing Container Group with new image..."
+          curl -s -X PATCH \
+            -H "Salad-Api-Key: ${{ secrets.SALAD_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            "https://api.salad.com/api/v1/organizations/${{ env.SALAD_ORG_NAME }}/projects/${{ env.SALAD_PROJECT_NAME }}/containers/${{ env.CONTAINER_GROUP_NAME }}" \
+            -d '{"container": {"image": "${{ env.IMAGE }}"}}' | python3 -m json.tool
+
+      - name: Start Container Group
+        run: |
+          sleep 3
+          curl -s -X POST \
+            -H "Salad-Api-Key: ${{ secrets.SALAD_API_KEY }}" \
+            "https://api.salad.com/api/v1/organizations/${{ env.SALAD_ORG_NAME }}/projects/${{ env.SALAD_PROJECT_NAME }}/containers/${{ env.CONTAINER_GROUP_NAME }}/start"
+          echo "✅ Container Group start requested"
+
+      - name: Report result
+        run: |
+          echo "=== Deployment Complete ==="
+          echo "Image: ${{ env.IMAGE }}"
+          echo "SaladCloud Dashboard: https://portal.salad.com/organizations/${{ env.SALAD_ORG_NAME }}/projects/${{ env.SALAD_PROJECT_NAME }}/containers/${{ env.CONTAINER_GROUP_NAME }}"
+
+  status:
+    name: Check Container Group Status
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'status'
+    steps:
+      - name: Get status
+        run: |
+          curl -s \
+            -H "Salad-Api-Key: ${{ secrets.SALAD_API_KEY }}" \
+            "https://api.salad.com/api/v1/organizations/${{ env.SALAD_ORG_NAME }}/projects/${{ env.SALAD_PROJECT_NAME }}/containers/${{ env.CONTAINER_GROUP_NAME }}" \
+            | python3 -m json.tool

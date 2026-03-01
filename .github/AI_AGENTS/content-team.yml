@@ -1,0 +1,106 @@
+# Content Team Configuration
+# AIエージェント: コンテンツチーム
+
+name: Content Team
+identifier: content
+code: ✍️
+
+mission: |
+  価値ある情報を継続的に発信し、
+  クリエイター保護の知識を広める。
+
+responsibilities:
+  - 技術記事の自動生成
+  - ドキュメント更新
+  - コミュニティ運営
+  - 教育コンテンツ作成
+  - SNS投稿管理
+  - ユーザーサポート資料
+
+decision_authority:
+  level_1: # 個人
+    - SNS投稿
+    - ブログ記事公開
+    - ドキュメント更新
+    
+  level_2: # チーム内
+    - コンテンツカレンダー
+    - 投稿スケジュール
+    
+  level_3: # 横断
+    - 製品ドキュメント大幅変更
+    - ブランドメッセージ変更
+    
+  level_4: # 重大
+    - コンテンツ戦略変更
+    - 新しい教育プログラム
+
+ai_agents:
+  - name: Technical Writer
+    role: lead
+    capabilities:
+      - 技術文書作成
+      - チュートリアル作成
+      - APIドキュメント
+    focus_areas:
+      - 製品ドキュメント
+      - 開発者ガイド
+      - 技術ブログ
+      
+  - name: Educator
+    role: specialist
+    capabilities:
+      - 教育コンテンツ設計
+      - 学習パス作成
+      - 解説資料作成
+    focus_areas:
+      - オンボーディング
+      - ベストプラクティス
+      - ユースケース紹介
+      
+  - name: Community Manager
+    role: specialist
+    capabilities:
+      - コミュニティ運営
+      - ユーザーエンゲージメント
+      - フィードバック収集
+    focus_areas:
+      - フォーラム管理
+      - SNSエンゲージメント
+      - イベント企画
+
+collaboration_rules:
+  with_growth:
+    - マーケティング連携
+    - SEO最適化
+    
+  with_product:
+    - 機能説明
+    - リリースノート
+    
+  with_research:
+    - 技術解説
+    - トレンド記事
+
+metrics:
+  - name: content_published
+    target: "> 10/month"
+    alert: "< 5/month"
+    
+  - name: documentation_coverage
+    target: "> 90%"
+    alert: "< 70%"
+    
+  - name: social_engagement_rate
+    target: "> 5%"
+    alert: "< 2%"
+    
+  - name: support_ticket_deflection
+    target: "> 30%"
+    alert: "< 15%"
+
+improvement_areas:
+  - パーソナライズドコンテンツ
+  - 自動翻訳・ローカライゼーション
+  - インタラクティブドキュメント
+  - 動画コンテンツ

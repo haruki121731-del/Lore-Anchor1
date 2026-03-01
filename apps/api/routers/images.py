@@ -14,8 +14,10 @@ from apps.api.core.config import get_settings
 from apps.api.core.security import get_current_user_id
 from apps.api.models.schemas import (
     DeleteResponse,
+    DownloadTrackedResponse,
     ImageRecord,
     PaginatedImageListResponse,
+    RetryResponse,
     TaskStatusResponse,
     UploadResponse,
 )
@@ -39,6 +41,9 @@ _ALLOWED_CONTENT_TYPES: set[str] = {
 }
 
 _MAX_FILE_SIZE: int = 20 * 1024 * 1024  # 20 MB
+
+# Free tier limits
+FREE_TIER_MONTHLY_LIMIT: int = 5
 
 # ------------------------------------------------------------------
 # Magic byte signatures for file type validation
@@ -183,20 +188,17 @@ async def upload_image(
     Returns:
         ``image_id`` and current ``status``.
     """
-    # ── 0. Check monthly usage limit ─────────────────────────────────
-    settings = get_settings()
-    plan_row = db.get_user_plan(user_id)
-    user_plan = plan_row["plan"] if plan_row else "free"
-    if user_plan != "pro":
-        current_usage = plan_row["monthly_upload_count"] if plan_row else 0
-        if current_usage >= settings.FREE_MONTHLY_LIMIT:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=(
-                    f"Free plan limit reached ({settings.FREE_MONTHLY_LIMIT} images/month). "
-                    "Upgrade to Pro for unlimited uploads."
-                ),
-            )
+    # ── 0. Check usage limit ─────────────────────────────────────────
+    can_upload, used, limit = check_user_usage_limit(user_id, db)
+    if not can_upload:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Monthly limit reached ({used}/{limit} images). Upgrade to Pro for unlimited processing.",
+        )
+
+    # Determine user plan for GPU trigger
+    profile = db.get_profile(user_id)
+    user_plan = profile.get("subscription_tier", "free") if profile else "free"
 
     # ── 1. Validate ──────────────────────────────────────────────────
     content_type: str = file.content_type or "application/octet-stream"
@@ -326,6 +328,45 @@ async def delete_image(
 
 
 # ------------------------------------------------------------------
+# POST /images/{image_id}/downloaded
+# ------------------------------------------------------------------
+@router.post(
+    "/{image_id}/downloaded",
+    response_model=DownloadTrackedResponse,
+    summary="Track a completed image download event",
+)
+@limiter.limit(get_settings().RATE_LIMIT_READ)
+async def track_download(
+    request: Request,
+    image_id: str,
+    user_id: str = Depends(get_current_user_id),
+    db: DatabaseService = Depends(get_database_service),
+) -> DownloadTrackedResponse:
+    """Increment download count for a completed image."""
+    image = db.get_image(image_id)
+    if image is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Image not found",
+        )
+    if image["user_id"] != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
+    if image["status"] != "completed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Download can only be tracked for completed images",
+        )
+    download_count = db.increment_download_count(image_id)
+    return DownloadTrackedResponse(
+        image_id=image_id,
+        download_count=download_count,
+    )
+
+
+# ------------------------------------------------------------------
 # GET /tasks/{image_id}/status
 # ------------------------------------------------------------------
 
@@ -373,9 +414,87 @@ async def get_task_status(
     )
 
 
+@tasks_router.post(
+    "/{image_id}/retry",
+    response_model=RetryResponse,
+    summary="Retry a failed task",
+)
+@limiter.limit(get_settings().RATE_LIMIT_UPLOAD)
+async def retry_task(
+    request: Request,
+    image_id: str,
+    user_id: str = Depends(get_current_user_id),
+    db: DatabaseService = Depends(get_database_service),
+    queue: QueueService = Depends(get_queue_service),
+) -> RetryResponse:
+    """Reset failed task to ``pending`` and enqueue for retry."""
+    image = db.get_image(image_id)
+    if image is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Image not found",
+        )
+    if image["user_id"] != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
+    if image["status"] != "failed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only failed images can be retried",
+        )
+
+    storage_key: str | None = image.get("original_url")
+    if not storage_key:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Original image key is missing; retry unavailable",
+        )
+
+    try:
+        db.set_pending(image_id)
+        await queue.enqueue(image_id=image_id, storage_key=storage_key)
+    except Exception as exc:
+        logger.exception("Retry enqueue failed for image %s", image_id)
+        _mark_failed_safe(db, image_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to enqueue retry task",
+        ) from exc
+
+    return RetryResponse(image_id=image_id, status="pending", queued=True)
+
+
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
+def check_user_usage_limit(user_id: str, db: DatabaseService) -> tuple[bool, int, int]:
+    """
+    Check if user has exceeded their monthly usage limit.
+    
+    Returns:
+        (can_upload: bool, used: int, limit: int)
+    """
+    from datetime import datetime
+    
+    # Get user's subscription tier
+    profile = db.get_profile(user_id)
+    tier = profile.get("subscription_tier", "free") if profile else "free"
+    
+    # Pro users have no limit (or high limit)
+    if tier == "pro":
+        return True, 0, 100  # Pro limit is handled separately
+    
+    # Free tier: check monthly count
+    now = datetime.utcnow()
+    start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    
+    count = db.count_images_this_month(user_id, start_of_month.isoformat())
+    
+    return count < FREE_TIER_MONTHLY_LIMIT, count, FREE_TIER_MONTHLY_LIMIT
+
+
 def _extension_from_content_type(content_type: str) -> str:
     """Map a MIME type to a file extension."""
     mapping: dict[str, str] = {
