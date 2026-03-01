@@ -244,7 +244,7 @@ class DatabaseService:
             }).eq("user_id", user_id).execute()
             return 1
 
-        new_count = plan_row["monthly_upload_count"] + 1
+        new_count: int = int(plan_row["monthly_upload_count"]) + 1
         self._client.table("user_plans").update({
             "monthly_upload_count": new_count,
         }).eq("user_id", user_id).execute()

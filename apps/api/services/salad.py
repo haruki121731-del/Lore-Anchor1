@@ -58,7 +58,8 @@ class SaladService:
             resp = await client.get(self._url(), headers=self._headers())
             resp.raise_for_status()
             data: dict[str, Any] = resp.json()
-            return data.get("current_state", {}).get("status", "unknown")
+            status: str = data.get("current_state", {}).get("status", "unknown")
+            return status
 
     async def start(self) -> bool:
         """Start the container group. Returns True if started successfully."""
