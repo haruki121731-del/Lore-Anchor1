@@ -183,6 +183,21 @@ async def upload_image(
     Returns:
         ``image_id`` and current ``status``.
     """
+    # ── 0. Check monthly usage limit ─────────────────────────────────
+    settings = get_settings()
+    plan_row = db.get_user_plan(user_id)
+    user_plan = plan_row["plan"] if plan_row else "free"
+    if user_plan != "pro":
+        current_usage = plan_row["monthly_upload_count"] if plan_row else 0
+        if current_usage >= settings.FREE_MONTHLY_LIMIT:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=(
+                    f"Free plan limit reached ({settings.FREE_MONTHLY_LIMIT} images/month). "
+                    "Upgrade to Pro for unlimited uploads."
+                ),
+            )
+
     # ── 1. Validate ──────────────────────────────────────────────────
     content_type: str = file.content_type or "application/octet-stream"
     if content_type not in _ALLOWED_CONTENT_TYPES:
@@ -227,6 +242,22 @@ async def upload_image(
         logger.info("[step 4/4] Enqueuing task for image_id=%s", image_id)
         await queue.enqueue(image_id=image_id, storage_key=storage_key)
         logger.info("[step 4/4] Redis enqueue succeeded")
+
+        # 5. Increment monthly usage counter
+        try:
+            db.increment_monthly_usage(user_id)
+        except Exception:
+            logger.warning("Failed to increment monthly usage for user %s", user_id)
+
+        # 6. Trigger SaladCloud GPU if Pro user
+        if user_plan == "pro":
+            try:
+                from apps.api.services.salad import SaladService
+                salad = SaladService()
+                if salad.enabled:
+                    await salad.start()
+            except Exception:
+                logger.warning("Failed to trigger SaladCloud GPU start")
 
     except HTTPException:
         # Re-raise HTTP errors (validation etc.) as-is.

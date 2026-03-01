@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from supabase import Client, create_client  # type: ignore[attr-defined]
@@ -182,6 +182,92 @@ class DatabaseService:
             return dict(response.data[0])  # type: ignore[arg-type]
         return None
 
+    # ------------------------------------------------------------------
+    # user_plans table — billing
+    # ------------------------------------------------------------------
+
+    def get_user_plan(self, user_id: str) -> dict[str, Any] | None:
+        """Return the user_plans row, or ``None`` if not yet created."""
+        response = (
+            self._client.table("user_plans")
+            .select("*")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        if response.data:
+            return dict(response.data[0])  # type: ignore[arg-type]
+        return None
+
+    def upsert_user_plan(
+        self,
+        user_id: str,
+        *,
+        plan: str | None = None,
+        stripe_customer_id: str | None = None,
+        stripe_subscription_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Create or update the user_plans row."""
+        data: dict[str, Any] = {"user_id": user_id}
+        if plan is not None:
+            data["plan"] = plan
+        if stripe_customer_id is not None:
+            data["stripe_customer_id"] = stripe_customer_id
+        if stripe_subscription_id is not None:
+            data["stripe_subscription_id"] = stripe_subscription_id
+        response = (
+            self._client.table("user_plans")
+            .upsert(data, on_conflict="user_id")
+            .execute()
+        )
+        return dict(response.data[0])  # type: ignore[arg-type]
+
+    def increment_monthly_usage(self, user_id: str) -> int:
+        """Increment monthly_upload_count and return new value.
+
+        Auto-resets count if past the reset date.
+        """
+        plan_row = self.get_user_plan(user_id)
+        if plan_row is None:
+            self.upsert_user_plan(user_id)
+            plan_row = self.get_user_plan(user_id)
+
+        assert plan_row is not None
+
+        # Check if we need to reset the monthly counter
+        reset_at = plan_row.get("monthly_reset_at", "")
+        now = datetime.now(timezone.utc)
+        if reset_at and now.isoformat() > reset_at:
+            next_reset = (now.replace(day=1) + timedelta(days=32)).replace(day=1)
+            self._client.table("user_plans").update({
+                "monthly_upload_count": 1,
+                "monthly_reset_at": next_reset.isoformat(),
+            }).eq("user_id", user_id).execute()
+            return 1
+
+        new_count = plan_row["monthly_upload_count"] + 1
+        self._client.table("user_plans").update({
+            "monthly_upload_count": new_count,
+        }).eq("user_id", user_id).execute()
+        return new_count
+
+    def activate_pro_plan(
+        self, stripe_customer_id: str, subscription_id: str | None = None,
+    ) -> None:
+        """Set plan='pro' for the user matching *stripe_customer_id*."""
+        data: dict[str, Any] = {"plan": "pro"}
+        if subscription_id:
+            data["stripe_subscription_id"] = subscription_id
+        self._client.table("user_plans").update(data).eq(
+            "stripe_customer_id", stripe_customer_id
+        ).execute()
+
+    def deactivate_pro_plan(self, stripe_customer_id: str) -> None:
+        """Revert plan to 'free' for the user matching *stripe_customer_id*."""
+        self._client.table("user_plans").update({
+            "plan": "free",
+            "stripe_subscription_id": None,
+        }).eq("stripe_customer_id", stripe_customer_id).execute()
+
 
 class DebugDatabaseService(DatabaseService):
     """In-memory stub used when ``DEBUG=true``.
@@ -279,6 +365,25 @@ class DebugDatabaseService(DatabaseService):
     def get_task_by_image_id(self, image_id: str) -> dict[str, Any] | None:
         """Debug stub — always returns ``None`` (no tasks table)."""
         return None
+
+    def get_user_plan(self, user_id: str) -> dict[str, Any] | None:
+        return None
+
+    def upsert_user_plan(
+        self, user_id: str, **kwargs: Any,
+    ) -> dict[str, Any]:
+        return {"user_id": user_id, "plan": "free", "monthly_upload_count": 0}
+
+    def increment_monthly_usage(self, user_id: str) -> int:
+        return 1
+
+    def activate_pro_plan(
+        self, stripe_customer_id: str, subscription_id: str | None = None,
+    ) -> None:
+        pass
+
+    def deactivate_pro_plan(self, stripe_customer_id: str) -> None:
+        pass
 
 
 def get_database_service() -> DatabaseService:

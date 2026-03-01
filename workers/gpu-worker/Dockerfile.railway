@@ -1,6 +1,6 @@
 # =============================================================================
-# lore-anchor GPU Worker — CPU-only variant for local development
-# Uses standard PyTorch (no CUDA) for faster builds on machines without GPU.
+# lore-anchor CPU Worker — Railway deployment
+# Build context: repository root (Railway default)
 # =============================================================================
 FROM python:3.10-slim
 
@@ -16,14 +16,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Install CPU-only PyTorch first, then remaining deps (excluding CUDA specs)
-COPY requirements.txt .
+COPY workers/gpu-worker/requirements.txt .
 RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
     grep -v -E '^(torch|torchvision|--extra-index|#|$)' requirements.txt > /tmp/reqs-cpu.txt && \
     pip install --no-cache-dir -r /tmp/reqs-cpu.txt
 
-COPY . .
+COPY workers/gpu-worker/ .
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD curl -f http://localhost:${HEALTH_PORT:-8080}/health || exit 1
 
 CMD ["python3", "main.py"]

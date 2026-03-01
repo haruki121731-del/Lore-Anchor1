@@ -1,0 +1,11 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "workers/gpu-worker/Dockerfile.railway"
+watchPatterns = ["workers/gpu-worker/**"]
+
+[deploy]
+startCommand = "python3 main.py"
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5

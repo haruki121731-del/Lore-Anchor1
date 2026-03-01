@@ -13,7 +13,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from apps.api.core.config import get_settings
-from apps.api.routers import images
+from apps.api.routers import billing, images
 from apps.api.routers.images import tasks_router
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -81,6 +81,7 @@ app.add_middleware(
 
 app.include_router(images.router, prefix="/api/v1")
 app.include_router(tasks_router, prefix="/api/v1")
+app.include_router(billing.router, prefix="/api/v1")
 
 
 # ------------------------------------------------------------------

@@ -43,6 +43,20 @@ class Settings(BaseSettings):
     RATE_LIMIT_UPLOAD: str = "10/minute"
     RATE_LIMIT_READ: str = "60/minute"
 
+    # --- Stripe (optional — billing disabled if not set) ---
+    STRIPE_SECRET_KEY: str = ""
+    STRIPE_WEBHOOK_SECRET: str = ""
+    STRIPE_PRO_PRICE_ID: str = ""
+
+    # --- Usage limits ---
+    FREE_MONTHLY_LIMIT: int = 5
+
+    # --- SaladCloud (optional — GPU scale-to-zero) ---
+    SALAD_API_KEY: str = ""
+    SALAD_ORG_NAME: str = ""
+    SALAD_PROJECT_NAME: str = "lore-anchor"
+    SALAD_CONTAINER_GROUP_NAME: str = "lore-anchor-worker"
+
     # --- Debug ---
     DEBUG: bool = False
 

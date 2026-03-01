@@ -58,6 +58,7 @@ MIST_STEPS: int = int(os.getenv("MIST_STEPS", "3"))
 R2_PUBLIC_DOMAIN: str = os.getenv("R2_PUBLIC_DOMAIN", "")
 WORKER_ID: str = platform.node()
 HEALTH_PORT: int = int(os.getenv("HEALTH_PORT", "8080"))
+IDLE_TIMEOUT_S: int = int(os.getenv("IDLE_TIMEOUT_S", "900"))  # 15 min default
 
 # Must match apps/api/services/queue.py QUEUE_KEY
 QUEUE_KEY: str = "lore_anchor_tasks"
@@ -67,6 +68,7 @@ _shutdown_requested: bool = False
 _processing: bool = False
 _images_processed: int = 0
 _images_failed: int = 0
+_last_task_time: float = time.monotonic()
 _worker_start_time: float = time.monotonic()
 
 # ---------------------------------------------------------------------------
@@ -421,19 +423,31 @@ def process_image(image_id: str, original_r2_key: str) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 def _run_consumer() -> None:
     """Block on Redis ``BLPOP`` and process tasks one at a time."""
-    global _processing, _images_processed, _images_failed
+    global _processing, _images_processed, _images_failed, _last_task_time
 
     r = redis.from_url(REDIS_URL, decode_responses=True)
     sb = _init_supabase()
     logger.info("Worker started, listening on queue: %s", QUEUE_KEY)
+    if IDLE_TIMEOUT_S > 0:
+        logger.info("Idle timeout enabled: %d seconds", IDLE_TIMEOUT_S)
 
     while not _shutdown_requested:
         # BLPOP blocks for up to 5 seconds, then re-checks shutdown flag.
         result: tuple[str, str] | None = r.blpop(QUEUE_KEY, timeout=5)  # type: ignore[assignment]
         if result is None:
+            # Check idle timeout (scale-to-zero for SaladCloud GPU workers)
+            if IDLE_TIMEOUT_S > 0:
+                idle_s = time.monotonic() - _last_task_time
+                if idle_s >= IDLE_TIMEOUT_S:
+                    logger.info(
+                        "Idle timeout reached (%.0fs >= %ds). Shutting down for scale-to-zero.",
+                        idle_s, IDLE_TIMEOUT_S,
+                    )
+                    break
             continue
 
         _key, raw_payload = result
+        _last_task_time = time.monotonic()
         logger.info("Received raw task payload: %s", raw_payload)
 
         try:
