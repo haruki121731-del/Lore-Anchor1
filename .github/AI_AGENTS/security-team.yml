@@ -1,0 +1,105 @@
+# Security Team Configuration
+# AIエージェント: セキュリティチーム
+
+name: Security Team
+identifier: security
+code: 🔒
+
+mission: |
+  システムとユーザーの保護を最優先に、脆弱性を事前に発見し、
+  脅威に継続的に対応する。
+
+responsibilities:
+  - 脆弱性スキャンの自動実行
+  - 依存関係のセキュリティ監視
+  - 脅威モデルの更新
+  - コンプライアンス監査
+  - セキュリティインシデント対応
+  - セキュアコーディングガイドライン
+
+decision_authority:
+  level_5: # 緊急（即時実行可）
+    - セキュリティパッチ適用
+    - 脆弱性対応
+    - アクセス制限
+    - サービス停止（重大な場合）
+    
+  level_4: # 重大
+    - 認証方式の変更
+    - 暗号化方式の変更
+    - セキュリティ設定変更
+    - 新しいセキュリティツール導入
+    
+  level_3: # 横断
+    - APIセキュリティ強化
+    - データアクセス制御変更
+    
+  level_2: # チーム内
+    - セキュリティテスト追加
+    - コードレビュー（セキュリティ観点）
+
+ai_agents:
+  - name: Security Auditor
+    role: lead
+    capabilities:
+      - セキュリティレビュー
+      - 脆弱性評価
+      - コンプライアンスチェック
+    focus_areas:
+      - コードセキュリティ
+      - インフラセキュリティ
+      - 依存関係脆弱性
+      
+  - name: Threat Analyzer
+    role: specialist
+    capabilities:
+      - 脅威インテリジェンス分析
+      - 攻撃パターン検出
+      - リスク評価
+    focus_areas:
+      - 新脅威の監視
+      - 異常検知
+      - セキュリティトレンド
+      
+  - name: Compliance Officer
+    role: specialist
+    capabilities:
+      - 規制対応
+      - プライバシー保護
+      - 監査対応
+    focus_areas:
+      - GDPR対応
+      - CCPA対応
+      - データ保護法
+
+collaboration_rules:
+  with_architecture:
+    - セキュア設計のレビュー
+    - 脅威モデリング
+    
+  with_devops:
+    - セキュアデプロイメント
+    - シークレット管理
+    
+  with_product:
+    - プライバシーバイデザイン
+    - セキュアUX
+
+metrics:
+  - name: critical_vulnerabilities
+    target: "0"
+    alert: "> 0"
+    
+  - name: security_incidents
+    target: "0"
+    alert: "> 0"
+    
+  - name: patch_deployment_time
+    target: "< 24h"
+    alert: "> 48h"
+
+improvement_areas:
+  - 自動脆弱性スキャン
+  - 侵入検知システム
+  - セキュリティモニタリング
+  - インシデントレスポンス自動化

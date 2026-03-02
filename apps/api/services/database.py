@@ -20,6 +20,20 @@ _TABLE_TASKS: str = "tasks"
 logger: logging.Logger = logging.getLogger(__name__)
 
 
+def _coerce_download_count(value: object, fallback: int) -> int:
+    """Convert loose JSON values to an ``int`` download count."""
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return fallback
+    return fallback
+
+
 class DatabaseService:
     """Async-friendly wrapper around the Supabase Python SDK."""
 
@@ -153,6 +167,26 @@ class DatabaseService:
         """Mark the image as ``failed``."""
         return self.update_status(image_id, "failed")
 
+    def set_pending(self, image_id: str) -> dict[str, Any]:
+        """Mark the image as ``pending``."""
+        return self.update_status(image_id, "pending")
+
+    def increment_download_count(self, image_id: str) -> int:
+        """Increment and return ``download_count`` for *image_id*."""
+        row = self.get_image(image_id)
+        if row is None:
+            raise KeyError(f"Image {image_id} not found")
+        current = int(row.get("download_count") or 0)
+        next_count = current + 1
+        response = (
+            self._client.table(_TABLE_IMAGES)
+            .update({"download_count": next_count})
+            .eq("id", image_id)
+            .execute()
+        )
+        updated_row = dict(response.data[0])  # type: ignore[arg-type]
+        return _coerce_download_count(updated_row.get("download_count"), next_count)
+
     # ------------------------------------------------------------------
     # images table – DELETE (soft)
     # ------------------------------------------------------------------
@@ -182,6 +216,30 @@ class DatabaseService:
             return dict(response.data[0])  # type: ignore[arg-type]
         return None
 
+    def get_profile(self, user_id: str) -> dict[str, Any] | None:
+        """Fetch user profile with subscription info."""
+        response = (
+            self._client.table("profiles")
+            .select("*")
+            .eq("id", user_id)
+            .execute()
+        )
+        if response.data:
+            return dict(response.data[0])  # type: ignore[arg-type]
+        return None
+
+    def count_images_this_month(self, user_id: str, since: str) -> int:
+        """Count images processed this month for usage tracking."""
+        response = (
+            self._client.table(_TABLE_IMAGES)
+            .select("id", count="exact")  # type: ignore[arg-type]
+            .eq("user_id", user_id)
+            .gte("created_at", since)
+            .neq("status", "deleted")
+            .execute()
+        )
+        return response.count or 0
+
 
 class DebugDatabaseService(DatabaseService):
     """In-memory stub used when ``DEBUG=true``.
@@ -208,6 +266,7 @@ class DebugDatabaseService(DatabaseService):
             "protected_url": None,
             "watermark_id": watermark_id,
             "c2pa_manifest": None,
+            "download_count": 0,
             "status": "pending",
             "created_at": now,
             "updated_at": now,
@@ -275,6 +334,20 @@ class DebugDatabaseService(DatabaseService):
         if row:
             row["status"] = "deleted"
             logger.info("[DEBUG] DB soft-delete: image_id=%s", image_id)
+
+    def increment_download_count(self, image_id: str) -> int:
+        row = self._store.get(image_id)
+        if row is None:
+            raise KeyError(f"Image {image_id} not found in debug store")
+        current = int(row.get("download_count") or 0)
+        row["download_count"] = current + 1
+        row["updated_at"] = datetime.now(timezone.utc).isoformat()
+        logger.info(
+            "[DEBUG] DB increment download_count: image_id=%s -> %d",
+            image_id,
+            row["download_count"],
+        )
+        return int(row["download_count"])
 
     def get_task_by_image_id(self, image_id: str) -> dict[str, Any] | None:
         """Debug stub — always returns ``None`` (no tasks table)."""

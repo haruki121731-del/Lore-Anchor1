@@ -1,11 +1,25 @@
 import type {
+  DownloadTrackedResponse,
   DeleteResponse,
   ImageRecord,
   PaginatedImageList,
+  RetryResponse,
+  TaskStatus,
   UploadResponse,
 } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+
+async function getApiError(res: Response): Promise<string> {
+  let detail = res.statusText;
+  try {
+    const body = await res.json();
+    if (body.detail) detail = body.detail;
+  } catch {
+    // use statusText
+  }
+  return detail;
+}
 
 export async function uploadImage(
   file: File,
@@ -51,16 +65,11 @@ export async function getImage(
   token: string
 ): Promise<ImageRecord> {
   const res = await fetch(`${API_BASE}/api/v1/images/${imageId}`, {
+    cache: "no-store",
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      const body = await res.json();
-      if (body.detail) detail = body.detail;
-    } catch {
-      // use statusText
-    }
+    const detail = await getApiError(res);
     throw new Error(`Failed to fetch image (${res.status}): ${detail}`);
   }
   return res.json() as Promise<ImageRecord>;
@@ -76,16 +85,11 @@ export async function listImages(
     page_size: String(pageSize),
   });
   const res = await fetch(`${API_BASE}/api/v1/images/?${params}`, {
+    cache: "no-store",
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      const body = await res.json();
-      if (body.detail) detail = body.detail;
-    } catch {
-      // use statusText
-    }
+    const detail = await getApiError(res);
     throw new Error(`Failed to fetch images (${res.status}): ${detail}`);
   }
   return res.json() as Promise<PaginatedImageList>;
@@ -100,14 +104,53 @@ export async function deleteImage(
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      const body = await res.json();
-      if (body.detail) detail = body.detail;
-    } catch {
-      // use statusText
-    }
+    const detail = await getApiError(res);
     throw new Error(`Failed to delete image (${res.status}): ${detail}`);
   }
   return res.json() as Promise<DeleteResponse>;
+}
+
+export async function getTaskStatus(
+  imageId: string,
+  token: string
+): Promise<TaskStatus> {
+  const res = await fetch(`${API_BASE}/api/v1/tasks/${imageId}/status`, {
+    cache: "no-store",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const detail = await getApiError(res);
+    throw new Error(`Failed to fetch task status (${res.status}): ${detail}`);
+  }
+  return res.json() as Promise<TaskStatus>;
+}
+
+export async function retryTask(
+  imageId: string,
+  token: string
+): Promise<RetryResponse> {
+  const res = await fetch(`${API_BASE}/api/v1/tasks/${imageId}/retry`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const detail = await getApiError(res);
+    throw new Error(`Failed to retry task (${res.status}): ${detail}`);
+  }
+  return res.json() as Promise<RetryResponse>;
+}
+
+export async function trackDownload(
+  imageId: string,
+  token: string
+): Promise<DownloadTrackedResponse> {
+  const res = await fetch(`${API_BASE}/api/v1/images/${imageId}/downloaded`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const detail = await getApiError(res);
+    throw new Error(`Failed to track download (${res.status}): ${detail}`);
+  }
+  return res.json() as Promise<DownloadTrackedResponse>;
 }

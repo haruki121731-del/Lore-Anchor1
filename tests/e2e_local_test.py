@@ -65,7 +65,7 @@ def main() -> None:
     resp = requests.get(f"{BASE_URL}/api/v1/images/", timeout=5)
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
     data = resp.json()
-    image_ids = [img["id"] for img in data["images"]]
+    image_ids = [img["image_id"] for img in data["images"]]
     assert image_id in image_ids, f"image_id {image_id} not found in list: {image_ids}"
     print("OK")
     passed += 1

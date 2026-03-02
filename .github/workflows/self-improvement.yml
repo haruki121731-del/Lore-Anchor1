@@ -1,0 +1,196 @@
+name: Self-Improvement Loop
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # 毎日深夜
+  workflow_dispatch:
+
+env:
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  collect-metrics:
+    runs-on: ubuntu-latest
+    outputs:
+      metrics: ${{ steps.metrics.outputs.data }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Collect system metrics
+        id: metrics
+        run: |
+          python3 << 'EOF'
+          import json
+          import os
+          
+          # ここで実際のメトリクス収集を行う
+          # 例: APIレスポンスタイム、エラーレート、コストなど
+          
+          metrics = {
+              "api_response_time_p99": 450,  # ms
+              "error_rate": 0.5,  # %
+              "test_coverage": 65,  # %
+              "deployment_frequency": 5,  # per day
+              "open_issues": 12,
+              "avg_issue_resolution_time": 48  # hours
+          }
+          
+          print(f"::set-output name=data::{json.dumps(metrics)}")
+          EOF
+
+  analyze-opportunities:
+    runs-on: ubuntu-latest
+    needs: collect-metrics
+    outputs:
+      opportunities: ${{ steps.analysis.outputs.opportunities }}
+    
+    steps:
+      - name: Analyze improvement opportunities
+        id: analysis
+        run: |
+          METRICS='${{ needs.collect-metrics.outputs.metrics }}'
+          
+          python3 << EOF
+          import json
+          
+          metrics = json.loads('$METRICS')
+          opportunities = []
+          
+          # パフォーマンス改善
+          if metrics.get('api_response_time_p99', 0) > 500:
+              opportunities.append({
+                  "type": "performance",
+                  "priority": "high",
+                  "title": "APIレスポンスタイム改善",
+                  "metric": f"p99: {metrics['api_response_time_p99']}ms",
+                  "target": "< 500ms"
+              })
+          
+          # テストカバレッジ向上
+          if metrics.get('test_coverage', 0) < 70:
+              opportunities.append({
+                  "type": "quality",
+                  "priority": "medium",
+                  "title": "テストカバレッジ向上",
+                  "metric": f"{metrics['test_coverage']}%",
+                  "target": "> 70%"
+              })
+          
+          # デプロイ頻度向上
+          if metrics.get('deployment_frequency', 0) < 10:
+              opportunities.append({
+                  "type": "velocity",
+                  "priority": "low",
+                  "title": "デプロイ頻度向上",
+                  "metric": f"{metrics['deployment_frequency']}/day",
+                  "target": "> 10/day"
+              })
+          
+          print(f"::set-output name=opportunities::{json.dumps(opportunities)}")
+          EOF
+
+  create-improvement-issues:
+    runs-on: ubuntu-latest
+    needs: analyze-opportunities
+    
+    steps:
+      - name: Create improvement issues
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const opportunities = JSON.parse(`${{ needs.analyze-opportunities.outputs.opportunities }}`);
+            
+            for (const opp of opportunities) {
+              // 既存の類似Issueをチェック
+              const existing = await github.rest.issues.listForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: 'improvement',
+                state: 'open'
+              });
+              
+              const isDuplicate = existing.data.some(issue => 
+                issue.title.includes(opp.title)
+              );
+              
+              if (!isDuplicate && opp.priority === 'high') {
+                // 高優先度の改善のみ自動作成
+                await github.rest.issues.create({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  title: `[AUTO] ${opp.title}`,
+                  body: `## 自動検出された改善機会\n\n**タイプ:** ${opp.type}\n**優先度:** ${opp.priority}\n\n### 現在の状態\n${opp.metric}\n\n### 目標\n${opp.target}\n\n---\n*このIssueは自動改善システムによって作成されました*`,
+                  labels: ['improvement', 'auto-detected', opp.priority]
+                });
+              }
+            }
+
+  dependency-update:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Check for dependency updates
+        run: |
+          # 依存関係の更新をチェック
+          echo "Checking dependencies..."
+          
+          # Python依存関係
+          if [ -f "requirements.txt" ]; then
+            pip list --outdated || true
+          fi
+          
+          # Node.js依存関係
+          if [ -f "package.json" ]; then
+            npm outdated || true
+          fi
+      
+      - name: Create dependency update issue
+        if: github.event.schedule == '0 0 * * 0'  # 週次のみ
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // 月次の依存関係更新Issueを作成
+            const today = new Date().toISOString().slice(0, 7);
+            
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[MAINTENANCE] Dependency Update - ${today}`,
+              body: `## 依存関係の定期更新\n\n### 対象\n- Pythonパッケージ\n- Node.jsパッケージ\n- GitHub Actions\n\n### チェックリスト\n- [ ] セキュリティアップデートを優先\n- [ ] テスト実行\n- [ ] ステージング検証\n- [ ] 本番デプロイ`,
+              labels: ['maintenance', 'dependencies']
+            });
+
+  weekly-report:
+    runs-on: ubuntu-latest
+    needs: [collect-metrics, analyze-opportunities]
+    
+    steps:
+      - name: Generate weekly report
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const metrics = JSON.parse(`${{ needs.collect-metrics.outputs.metrics }}`);
+            const opportunities = JSON.parse(`${{ needs.analyze-opportunities.outputs.opportunities }}`);
+            
+            const report = `## 📊 週次システム健全性レポート\n\n### メトリクス\n| メトリクス | 値 | 目標 | ステータス |\n|-----------|-----|------|-----------|\n| API P99 Latency | ${metrics.api_response_time_p99}ms | < 500ms | ${metrics.api_response_time_p99 < 500 ? '✅' : '⚠️'} |\n| Error Rate | ${metrics.error_rate}% | < 1% | ${metrics.error_rate < 1 ? '✅' : '⚠️'} |\n| Test Coverage | ${metrics.test_coverage}% | > 70% | ${metrics.test_coverage > 70 ? '✅' : '⚠️'} |\n| Deployment Freq | ${metrics.deployment_frequency}/day | > 10/day | ${metrics.deployment_frequency > 10 ? '✅' : '⚠️'} |\n\n### 改善機会 (${opportunities.length})\n${opportunities.map(o => `- **${o.title}** (${o.priority}): ${o.metric} → ${o.target}`).join('\\n')}\n\n### 推奨アクション\n${opportunities.filter(o => o.priority === 'high').map(o => `- [ ] ${o.title}`).join('\\n') || '現時点で緊急のアクションはありません'}\n\n---\n*Generated by Self-Improvement System*`;
+            
+            // WeeklyレポートIssueを作成
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[REPORT] Weekly System Health - ${new Date().toISOString().slice(0, 10)}`,
+              body: report,
+              labels: ['report', 'weekly']
+            });
