@@ -98,6 +98,56 @@ If you are an AI agent continuing this work:
 ## Context History
 
 <!-- Auto-appended by .github/workflows/save-context.yml -->
+### 2026-03-02 10:32 JST
+- Trigger: `workflow_run`
+- Latest commit: `52e5937 chore: update AI context snapshot [skip ci]`
+- Open ai-code issues (1):
+- #43: [TEST] ai-code label trigger
+```
+52e5937 chore: update AI context snapshot [skip ci]
+dbb6257 merge: PR #39 — CPU worker improvements + ROADMAP
+ad8d5eb merge: rebase PR #39 on updated main after PR #42 merge
+e012f52 chore: update AI context snapshot [skip ci]
+cb98a3f merge: PR #42 — billing, SaladCloud, landing page, CPU worker fix
+cbcb3f3 fix(ci): remove unused Path import in cpu-worker
+1d8b1a6 merge: resolve conflicts between claude/fix-issue-8CmuF and claude/interesting-roentgen
+435d640 chore: update AI context snapshot [skip ci]
+c5190df merge: resolve conflicts between main and claude/interesting-roentgen
+b1b05ea Merge remote-tracking branch 'origin/main' into claude/magical-lamarr
+```
+### 2026-03-02 10:32 JST
+- Trigger: `issues`
+- Latest commit: `dbb6257 merge: PR #39 — CPU worker improvements + ROADMAP`
+- Open ai-code issues (1):
+- #43: [TEST] ai-code label trigger
+```
+dbb6257 merge: PR #39 — CPU worker improvements + ROADMAP
+ad8d5eb merge: rebase PR #39 on updated main after PR #42 merge
+e012f52 chore: update AI context snapshot [skip ci]
+cb98a3f merge: PR #42 — billing, SaladCloud, landing page, CPU worker fix
+cbcb3f3 fix(ci): remove unused Path import in cpu-worker
+1d8b1a6 merge: resolve conflicts between claude/fix-issue-8CmuF and claude/interesting-roentgen
+435d640 chore: update AI context snapshot [skip ci]
+c5190df merge: resolve conflicts between main and claude/interesting-roentgen
+b1b05ea Merge remote-tracking branch 'origin/main' into claude/magical-lamarr
+d734f38 fix: resolve mypy no-any-return errors in salad.py and database.py
+```
+### 2026-03-02 10:06 JST
+- Trigger: `issues`
+- Latest commit: `cb98a3f merge: PR #42 — billing, SaladCloud, landing page, CPU worker fix`
+- No open ai-code issues
+```
+cb98a3f merge: PR #42 — billing, SaladCloud, landing page, CPU worker fix
+cbcb3f3 fix(ci): remove unused Path import in cpu-worker
+1d8b1a6 merge: resolve conflicts between claude/fix-issue-8CmuF and claude/interesting-roentgen
+435d640 chore: update AI context snapshot [skip ci]
+c5190df merge: resolve conflicts between main and claude/interesting-roentgen
+d734f38 fix: resolve mypy no-any-return errors in salad.py and database.py
+34f06eb feat: address all open issues (#31-#38) — unified LP, CPU worker, Stripe, scale-to-zero, growth engine
+3d54657 chore: update AI context snapshot [skip ci]
+c23756d chore: update AI context snapshot [skip ci]
+794843f chore: update AI context snapshot [skip ci]
+```
 ### 2026-03-02 00:14 JST
 - Trigger: `schedule`
 - Latest commit: `3d54657 chore: update AI context snapshot [skip ci]`

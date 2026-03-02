@@ -1,9 +1,12 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { LogoutButton } from "@/components/logout-button";
 import { ImageUploader } from "@/components/image-uploader";
 import { ImageList } from "@/components/image-list";
+import { UsageBanner } from "@/components/usage-banner";
+import { Button } from "@/components/ui/button";
 
 export default function DashboardPage() {
   const [refreshKey, setRefreshKey] = useState(0);
@@ -16,28 +19,39 @@ export default function DashboardPage() {
             <p className="text-xs uppercase tracking-[0.22em] text-cyan-300/80">Private Beta</p>
             <h1 className="text-xl font-semibold text-white">Lore Anchor Dashboard</h1>
           </div>
-          <LogoutButton />
+          <div className="flex items-center gap-3">
+            <Link href="/upgrade">
+              <Button variant="outline" size="sm">
+                Upgrade
+              </Button>
+            </Link>
+            <LogoutButton />
+          </div>
         </div>
       </header>
 
-      <main className="mx-auto grid max-w-6xl gap-6 px-6 py-8 md:grid-cols-[1.2fr_2fr]">
-        <section className="rounded-2xl border border-white/10 bg-slate-900/70 p-5 shadow-2xl shadow-slate-950/30">
-          <h2 className="text-lg font-semibold text-white">アップロード</h2>
-          <p className="mt-1 text-sm text-slate-300">
-            画像をアップロードすると、保護処理が自動でキューに追加されます。
-          </p>
-          <ImageUploader
-            onUploadComplete={() => setRefreshKey((k) => k + 1)}
-          />
-        </section>
+      <main className="mx-auto max-w-6xl px-6 py-8">
+        <UsageBanner refreshKey={refreshKey} />
 
-        <section className="rounded-2xl border border-white/10 bg-slate-900/70 p-5 shadow-2xl shadow-slate-950/30">
-          <h2 className="text-lg font-semibold text-white">ジョブ状況</h2>
-          <p className="mt-1 text-sm text-slate-300">
-            pending / processing / completed / failed をリアルタイムで追跡できます。
-          </p>
-          <ImageList refreshKey={refreshKey} />
-        </section>
+        <div className="mt-6 grid gap-6 md:grid-cols-[1.2fr_2fr]">
+          <section className="rounded-2xl border border-white/10 bg-slate-900/70 p-5 shadow-2xl shadow-slate-950/30">
+            <h2 className="text-lg font-semibold text-white">アップロード</h2>
+            <p className="mt-1 text-sm text-slate-300">
+              画像をアップロードすると、保護処理が自動でキューに追加されます。
+            </p>
+            <ImageUploader
+              onUploadComplete={() => setRefreshKey((k) => k + 1)}
+            />
+          </section>
+
+          <section className="rounded-2xl border border-white/10 bg-slate-900/70 p-5 shadow-2xl shadow-slate-950/30">
+            <h2 className="text-lg font-semibold text-white">ジョブ状況</h2>
+            <p className="mt-1 text-sm text-slate-300">
+              pending / processing / completed / failed をリアルタイムで追跡できます。
+            </p>
+            <ImageList refreshKey={refreshKey} />
+          </section>
+        </div>
       </main>
     </div>
   );
