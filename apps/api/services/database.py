@@ -4,19 +4,34 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from supabase import Client, create_client
+from supabase import Client, create_client  # type: ignore[attr-defined]
 
 from apps.api.core.config import get_settings
 
 # MDD Section 4.2 – valid status transitions
-_VALID_STATUSES: set[str] = {"pending", "processing", "completed", "failed"}
+_VALID_STATUSES: set[str] = {"pending", "processing", "completed", "failed", "deleted"}
 
 _TABLE_IMAGES: str = "images"
+_TABLE_TASKS: str = "tasks"
 
 logger: logging.Logger = logging.getLogger(__name__)
+
+
+def _coerce_download_count(value: object, fallback: int) -> int:
+    """Convert loose JSON values to an ``int`` download count."""
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return fallback
+    return fallback
 
 
 class DatabaseService:
@@ -51,7 +66,7 @@ class DatabaseService:
         response = (
             self._client.table(_TABLE_IMAGES).insert(row).execute()
         )
-        return dict(response.data[0])
+        return dict(response.data[0])  # type: ignore[arg-type]
 
     # ------------------------------------------------------------------
     # images table – READ
@@ -63,22 +78,48 @@ class DatabaseService:
             self._client.table(_TABLE_IMAGES)
             .select("*")
             .eq("id", image_id)
+            .neq("status", "deleted")
             .execute()
         )
         if response.data:
-            return dict(response.data[0])
+            return dict(response.data[0])  # type: ignore[arg-type]
         return None
 
-    def list_images_by_user(self, user_id: str) -> list[dict[str, Any]]:
-        """Return all image rows belonging to *user_id*, newest first."""
+    def list_images_by_user(
+        self,
+        user_id: str,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Return image rows belonging to *user_id* with pagination.
+
+        Returns:
+            (rows, total_count) tuple.
+        """
+        # Get total count
+        count_response = (
+            self._client.table(_TABLE_IMAGES)
+            .select("id", count="exact")  # type: ignore[arg-type]
+            .eq("user_id", user_id)
+            .neq("status", "deleted")
+            .execute()
+        )
+        total = count_response.count or 0
+
+        # Get paginated rows
+        offset = (page - 1) * page_size
         response = (
             self._client.table(_TABLE_IMAGES)
             .select("*")
             .eq("user_id", user_id)
+            .neq("status", "deleted")
             .order("created_at", desc=True)
+            .range(offset, offset + page_size - 1)
             .execute()
         )
-        return [dict(row) for row in response.data]
+        rows = [dict(row) for row in response.data]  # type: ignore[arg-type]
+        return rows, total
 
     # ------------------------------------------------------------------
     # images table – UPDATE
@@ -96,7 +137,7 @@ class DatabaseService:
             .eq("id", image_id)
             .execute()
         )
-        return dict(response.data[0])
+        return dict(response.data[0])  # type: ignore[arg-type]
 
     def set_protected_url(
         self,
@@ -120,11 +161,170 @@ class DatabaseService:
             .eq("id", image_id)
             .execute()
         )
-        return dict(response.data[0])
+        return dict(response.data[0])  # type: ignore[arg-type]
 
     def set_failed(self, image_id: str) -> dict[str, Any]:
         """Mark the image as ``failed``."""
         return self.update_status(image_id, "failed")
+
+    def set_pending(self, image_id: str) -> dict[str, Any]:
+        """Mark the image as ``pending``."""
+        return self.update_status(image_id, "pending")
+
+    def increment_download_count(self, image_id: str) -> int:
+        """Increment and return ``download_count`` for *image_id*."""
+        row = self.get_image(image_id)
+        if row is None:
+            raise KeyError(f"Image {image_id} not found")
+        current = int(row.get("download_count") or 0)
+        next_count = current + 1
+        response = (
+            self._client.table(_TABLE_IMAGES)
+            .update({"download_count": next_count})
+            .eq("id", image_id)
+            .execute()
+        )
+        updated_row = dict(response.data[0])  # type: ignore[arg-type]
+        return _coerce_download_count(updated_row.get("download_count"), next_count)
+
+    # ------------------------------------------------------------------
+    # images table – DELETE (soft)
+    # ------------------------------------------------------------------
+
+    def delete_image(self, image_id: str) -> None:
+        """Soft-delete an image by setting status to 'deleted'."""
+        self._client.table(_TABLE_IMAGES).update(
+            {"status": "deleted"}
+        ).eq("id", image_id).execute()
+        logger.info("Image soft-deleted: image_id=%s", image_id)
+
+    # ------------------------------------------------------------------
+    # tasks table – READ
+    # ------------------------------------------------------------------
+
+    def get_task_by_image_id(self, image_id: str) -> dict[str, Any] | None:
+        """Return the most recent task row for *image_id*, or ``None``."""
+        response = (
+            self._client.table(_TABLE_TASKS)
+            .select("*")
+            .eq("image_id", image_id)
+            .order("started_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if response.data:
+            return dict(response.data[0])  # type: ignore[arg-type]
+        return None
+
+    def get_profile(self, user_id: str) -> dict[str, Any] | None:
+        """Fetch user profile with subscription info."""
+        response = (
+            self._client.table("profiles")
+            .select("*")
+            .eq("id", user_id)
+            .execute()
+        )
+        if response.data:
+            return dict(response.data[0])  # type: ignore[arg-type]
+        return None
+
+    def count_images_this_month(self, user_id: str, since: str) -> int:
+        """Count images processed this month for usage tracking."""
+        response = (
+            self._client.table(_TABLE_IMAGES)
+            .select("id", count="exact")  # type: ignore[arg-type]
+            .eq("user_id", user_id)
+            .gte("created_at", since)
+            .neq("status", "deleted")
+            .execute()
+        )
+        return response.count or 0
+
+    # ------------------------------------------------------------------
+    # user_plans table — billing
+    # ------------------------------------------------------------------
+
+    def get_user_plan(self, user_id: str) -> dict[str, Any] | None:
+        """Return the user_plans row, or ``None`` if not yet created."""
+        response = (
+            self._client.table("user_plans")
+            .select("*")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        if response.data:
+            return dict(response.data[0])  # type: ignore[arg-type]
+        return None
+
+    def upsert_user_plan(
+        self,
+        user_id: str,
+        *,
+        plan: str | None = None,
+        stripe_customer_id: str | None = None,
+        stripe_subscription_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Create or update the user_plans row."""
+        data: dict[str, Any] = {"user_id": user_id}
+        if plan is not None:
+            data["plan"] = plan
+        if stripe_customer_id is not None:
+            data["stripe_customer_id"] = stripe_customer_id
+        if stripe_subscription_id is not None:
+            data["stripe_subscription_id"] = stripe_subscription_id
+        response = (
+            self._client.table("user_plans")
+            .upsert(data, on_conflict="user_id")
+            .execute()
+        )
+        return dict(response.data[0])  # type: ignore[arg-type]
+
+    def increment_monthly_usage(self, user_id: str) -> int:
+        """Increment monthly_upload_count and return new value.
+
+        Auto-resets count if past the reset date.
+        """
+        plan_row = self.get_user_plan(user_id)
+        if plan_row is None:
+            self.upsert_user_plan(user_id)
+            plan_row = self.get_user_plan(user_id)
+
+        assert plan_row is not None
+
+        # Check if we need to reset the monthly counter
+        reset_at = plan_row.get("monthly_reset_at", "")
+        now = datetime.now(timezone.utc)
+        if reset_at and now.isoformat() > reset_at:
+            next_reset = (now.replace(day=1) + timedelta(days=32)).replace(day=1)
+            self._client.table("user_plans").update({
+                "monthly_upload_count": 1,
+                "monthly_reset_at": next_reset.isoformat(),
+            }).eq("user_id", user_id).execute()
+            return 1
+
+        new_count: int = int(plan_row["monthly_upload_count"]) + 1
+        self._client.table("user_plans").update({
+            "monthly_upload_count": new_count,
+        }).eq("user_id", user_id).execute()
+        return new_count
+
+    def activate_pro_plan(
+        self, stripe_customer_id: str, subscription_id: str | None = None,
+    ) -> None:
+        """Set plan='pro' for the user matching *stripe_customer_id*."""
+        data: dict[str, Any] = {"plan": "pro"}
+        if subscription_id:
+            data["stripe_subscription_id"] = subscription_id
+        self._client.table("user_plans").update(data).eq(
+            "stripe_customer_id", stripe_customer_id
+        ).execute()
+
+    def deactivate_pro_plan(self, stripe_customer_id: str) -> None:
+        """Revert plan to 'free' for the user matching *stripe_customer_id*."""
+        self._client.table("user_plans").update({
+            "plan": "free",
+            "stripe_subscription_id": None,
+        }).eq("stripe_customer_id", stripe_customer_id).execute()
 
 
 class DebugDatabaseService(DatabaseService):
@@ -152,6 +352,7 @@ class DebugDatabaseService(DatabaseService):
             "protected_url": None,
             "watermark_id": watermark_id,
             "c2pa_manifest": None,
+            "download_count": 0,
             "status": "pending",
             "created_at": now,
             "updated_at": now,
@@ -162,13 +363,24 @@ class DebugDatabaseService(DatabaseService):
 
     def get_image(self, image_id: str) -> dict[str, Any] | None:
         row = self._store.get(image_id)
-        return dict(row) if row else None
+        if row and row.get("status") != "deleted":
+            return dict(row)
+        return None
 
-    def list_images_by_user(self, user_id: str) -> list[dict[str, Any]]:
-        return [
+    def list_images_by_user(
+        self,
+        user_id: str,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[dict[str, Any]], int]:
+        all_rows = [
             dict(r) for r in self._store.values()
-            if r["user_id"] == user_id
+            if r["user_id"] == user_id and r.get("status") != "deleted"
         ]
+        total = len(all_rows)
+        offset = (page - 1) * page_size
+        return all_rows[offset:offset + page_size], total
 
     def update_status(self, image_id: str, status: str) -> dict[str, Any]:
         if status not in _VALID_STATUSES:
@@ -202,6 +414,55 @@ class DebugDatabaseService(DatabaseService):
             row["c2pa_manifest"] = c2pa_manifest
         logger.info("[DEBUG] DB update: image_id=%s -> completed", image_id)
         return dict(row)
+
+    def delete_image(self, image_id: str) -> None:
+        row = self._store.get(image_id)
+        if row:
+            row["status"] = "deleted"
+            logger.info("[DEBUG] DB soft-delete: image_id=%s", image_id)
+
+    def increment_download_count(self, image_id: str) -> int:
+        row = self._store.get(image_id)
+        if row is None:
+            raise KeyError(f"Image {image_id} not found in debug store")
+        current = int(row.get("download_count") or 0)
+        row["download_count"] = current + 1
+        row["updated_at"] = datetime.now(timezone.utc).isoformat()
+        logger.info(
+            "[DEBUG] DB increment download_count: image_id=%s -> %d",
+            image_id,
+            row["download_count"],
+        )
+        return int(row["download_count"])
+
+    def get_task_by_image_id(self, image_id: str) -> dict[str, Any] | None:
+        """Debug stub — always returns ``None`` (no tasks table)."""
+        return None
+
+    def get_profile(self, user_id: str) -> dict[str, Any] | None:
+        return None
+
+    def count_images_this_month(self, user_id: str, since: str) -> int:
+        return 0
+
+    def get_user_plan(self, user_id: str) -> dict[str, Any] | None:
+        return None
+
+    def upsert_user_plan(
+        self, user_id: str, **kwargs: Any,
+    ) -> dict[str, Any]:
+        return {"user_id": user_id, "plan": "free", "monthly_upload_count": 0}
+
+    def increment_monthly_usage(self, user_id: str) -> int:
+        return 1
+
+    def activate_pro_plan(
+        self, stripe_customer_id: str, subscription_id: str | None = None,
+    ) -> None:
+        pass
+
+    def deactivate_pro_plan(self, stripe_customer_id: str) -> None:
+        pass
 
 
 def get_database_service() -> DatabaseService:

@@ -5,9 +5,12 @@ on:
     branches: [main]
     paths:
       - "workers/gpu-worker/**"
+      - ".github/workflows/docker-build.yml"
   pull_request:
     paths:
       - "workers/gpu-worker/**"
+      - ".github/workflows/docker-build.yml"
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
@@ -26,7 +29,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry
-        if: github.event_name == 'push'
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -39,7 +42,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest
             type=sha,prefix=
 
       - name: Build and push GPU Worker image
@@ -47,8 +50,9 @@ jobs:
         with:
           context: workers/gpu-worker
           file: workers/gpu-worker/Dockerfile
-          push: ${{ github.event_name == 'push' }}
+          push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
           cache-from: type=gha
           cache-to: type=gha,mode=max

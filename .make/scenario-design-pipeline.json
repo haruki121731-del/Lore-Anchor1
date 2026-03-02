@@ -1,0 +1,217 @@
+{
+  "_comment": "Make.com Blueprint — Figma Design + Canva Marketing Pipeline",
+  "_import_instructions": "Go to Make.com → Scenarios → Import Blueprint → paste this file",
+  "_required_connections": [
+    "OpenAI (any existing 'My OpenAI connection')",
+    "Notion (any existing Notion Internal connection)"
+  ],
+  "_required_env_vars_in_make": [
+    "FIGMA_TOKEN — Figma personal access token (Settings → Personal access tokens)",
+    "CANVA_TOKEN — Canva API token (developer.canva.com)",
+    "GITHUB_TOKEN — your PAT",
+    "GITHUB_REPO — owner/repo"
+  ],
+  "_workflow_description": [
+    "Trigger: POST webhook with {figma_url, task, component_name}",
+    "Step 2: Fetch Figma design JSON via API",
+    "Step 3: OpenAI Vision analyzes screenshot → generates React component",
+    "Step 4: OpenAI generates marketing copy for the new feature",
+    "Step 5: HTTP → Canva API creates social media post design",
+    "Step 6: GitHub → create PR with component code",
+    "Step 7: Notion → log design task"
+  ],
+  "name": "🎨 Figma→Code + Canva Marketing Pipeline",
+  "flow": [
+    {
+      "id": 1,
+      "module": "gateway:CustomWebHook",
+      "version": 1,
+      "parameters": {
+        "hook": null,
+        "maxResults": 1
+      },
+      "mapper": {},
+      "metadata": {
+        "designer": { "x": 0, "y": 0 },
+        "restore": { "parameters": { "hook": { "label": "Design Task Webhook" } } },
+        "notes": "Receives: {figma_url, task_title, component_name, feature_description}"
+      }
+    },
+    {
+      "id": 2,
+      "module": "http:MakeRequest",
+      "version": 4,
+      "parameters": { "authenticationType": "noAuth" },
+      "mapper": {
+        "url": "https://api.figma.com/v1/images/{{split(split(1.figma_url; '/file/')[1]; '/')[0]}}",
+        "method": "get",
+        "headers": [
+          { "name": "X-Figma-Token", "value": "__FIGMA_TOKEN__" }
+        ],
+        "queryParameters": [
+          { "name": "ids", "value": "{{split(1.figma_url; 'node-id=')[1]}}" },
+          { "name": "format", "value": "png" },
+          { "name": "scale", "value": "2" }
+        ],
+        "parseResponse": true,
+        "stopOnHttpError": false,
+        "allowRedirects": true,
+        "shareCookies": false,
+        "requestCompressedContent": true
+      },
+      "metadata": {
+        "designer": { "x": 300, "y": 0 },
+        "notes": "Fetches Figma component as PNG image for Vision analysis"
+      }
+    },
+    {
+      "id": 3,
+      "module": "openai-gpt-3:analyzeImages",
+      "version": 1,
+      "parameters": { "account": "__OPENAI_CONNECTION_ID__" },
+      "mapper": {
+        "model": "gpt-4o",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are an expert React/Next.js engineer for Lore-Anchor (AI protection SaaS).\n\nAnalyze this Figma design and generate a complete React component.\n\nComponent name: {{1.component_name}}\nTask: {{1.task_title}}\n\nStack: Next.js 14, TypeScript, Tailwind CSS, Framer Motion\n\nProvide:\n1. Complete TypeScript component code\n2. Tailwind classes matching the design\n3. Framer Motion animations if applicable\n4. Props interface\n\nReturn ONLY code, no explanations."
+              },
+              {
+                "type": "image_url",
+                "image_url": { "url": "{{2.images[].url}}", "detail": "high" }
+              }
+            ]
+          }
+        ],
+        "maxTokens": 4096
+      },
+      "metadata": {
+        "designer": { "x": 600, "y": 0 },
+        "notes": "GPT-4 Vision analyzes Figma screenshot and generates React component"
+      }
+    },
+    {
+      "id": 4,
+      "module": "openai-gpt-3:CreateCompletion",
+      "version": 1,
+      "parameters": { "account": "__OPENAI_CONNECTION_ID__" },
+      "mapper": {
+        "model": "gpt-4o-mini",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a marketing copywriter for Lore-Anchor, an AI protection SaaS for Japanese illustrators. Write punchy, trust-building Japanese copy."
+          },
+          {
+            "role": "user",
+            "content": "Write marketing copy for this new feature:\n\n{{1.feature_description}}\n\nCreate:\n1. Twitter post (140 chars max, Japanese)\n2. Canva social card headline (20 chars)\n3. Canva social card subtext (40 chars)\n4. Feature announcement for note.com (3 paragraphs)"
+          }
+        ],
+        "maxTokens": 1000
+      },
+      "metadata": {
+        "designer": { "x": 600, "y": 300 },
+        "notes": "Generates Japanese marketing copy for the new Figma-designed feature"
+      }
+    },
+    {
+      "id": 5,
+      "module": "http:MakeRequest",
+      "version": 4,
+      "parameters": { "authenticationType": "noAuth" },
+      "mapper": {
+        "url": "https://api.canva.com/rest/v1/autofills",
+        "method": "post",
+        "headers": [
+          { "name": "Authorization", "value": "Bearer __CANVA_TOKEN__" },
+          { "name": "Content-Type", "value": "application/json" }
+        ],
+        "contentType": "json",
+        "inputMethod": "jsonString",
+        "jsonStringBodyContent": "{\"brand_template_id\": \"__CANVA_TEMPLATE_ID__\", \"title\": \"feature-announce-{{formatDate(now; 'YYYYMMDD')}}\", \"data\": {\"headline\": {\"type\": \"text\", \"text\": \"{{substring(4.choices[].message.content; 0; 20)}}\"}, \"subtext\": {\"type\": \"text\", \"text\": \"{{substring(4.choices[].message.content; 21; 40)}}\"}}}",
+        "parseResponse": true,
+        "stopOnHttpError": false,
+        "allowRedirects": true,
+        "shareCookies": false,
+        "requestCompressedContent": true,
+        "timeout": 30
+      },
+      "metadata": {
+        "designer": { "x": 900, "y": 300 },
+        "notes": "Creates Canva social card with AI-generated copy. Requires Canva brand template ID."
+      }
+    },
+    {
+      "id": 6,
+      "module": "http:MakeRequest",
+      "version": 4,
+      "parameters": { "authenticationType": "noAuth" },
+      "mapper": {
+        "url": "https://api.github.com/repos/__GITHUB_REPO__/issues",
+        "method": "post",
+        "headers": [
+          { "name": "Authorization", "value": "Bearer __GITHUB_TOKEN__" },
+          { "name": "Content-Type", "value": "application/json" },
+          { "name": "X-GitHub-Api-Version", "value": "2022-11-28" }
+        ],
+        "contentType": "json",
+        "inputMethod": "jsonString",
+        "jsonStringBodyContent": "{\"title\": \"[Figma→Code] {{1.component_name}}\", \"body\": \"## Component from Figma\\n\\nFigma URL: {{1.figma_url}}\\n\\n## Generated Code\\n\\n```tsx\\n{{3.choices[].message.content}}\\n```\\n\\n## Marketing Copy\\n\\n{{4.choices[].message.content}}\", \"labels\": [\"figma-to-code\", \"ai-coded-local\"]}",
+        "parseResponse": true,
+        "stopOnHttpError": false,
+        "allowRedirects": true,
+        "shareCookies": false,
+        "requestCompressedContent": true
+      },
+      "metadata": {
+        "designer": { "x": 900, "y": 0 },
+        "notes": "Creates GitHub issue with generated component code ready for PR"
+      }
+    },
+    {
+      "id": 7,
+      "module": "notion:CreateDatabasePageAdvanced",
+      "version": 2,
+      "parameters": {
+        "connection": "__NOTION_CONNECTION_ID__",
+        "database": "__NOTION_DESIGN_DB_ID__"
+      },
+      "mapper": {
+        "properties": [
+          { "name": "Component", "type": "title", "value": "{{1.component_name}}" },
+          { "name": "Figma URL", "type": "url", "value": "{{1.figma_url}}" },
+          { "name": "GitHub Issue", "type": "url", "value": "{{6.html_url}}" },
+          { "name": "Canva Design", "type": "url", "value": "{{5.design.url}}" },
+          { "name": "Status", "type": "select", "value": "Generated" },
+          { "name": "Date", "type": "date", "value": "{{now}}" }
+        ]
+      },
+      "metadata": {
+        "designer": { "x": 1200, "y": 0 },
+        "notes": "Logs: Figma design → code → Canva asset all in one Notion row"
+      }
+    }
+  ],
+  "metadata": {
+    "instant": true,
+    "version": 1,
+    "scenario": {
+      "roundtrips": 1,
+      "maxErrors": 3,
+      "autoCommit": true,
+      "autoCommitTriggerLast": true,
+      "sequential": false,
+      "slots": null,
+      "confidential": false,
+      "dataloss": false,
+      "dlq": false,
+      "freshVariables": false
+    },
+    "designer": {
+      "orphans": []
+    }
+  }
+}

@@ -1,0 +1,194 @@
+{
+  "_comment": "Make.com Blueprint — LLM Dev Router Pipeline",
+  "_import_instructions": "Go to Make.com → Scenarios → Import Blueprint → paste this file",
+  "_required_connections": [
+    "OpenAI (any existing 'My OpenAI connection')",
+    "HTTP (no auth needed — uses GitHub API token in header)",
+    "Notion (any existing Notion Internal connection)"
+  ],
+  "_required_env_vars_in_make": [
+    "GITHUB_TOKEN — your PAT (ghp_...)",
+    "GITHUB_REPO — owner/repo e.g. haruki121731-del/lore-anchor",
+    "COVIBE_ROUTER_URL — ngrok URL e.g. https://abc123.ngrok.io (run: ngrok http 8888)"
+  ],
+  "name": "🤖 LLM Dev Router — GitHub Issue → Ollama/Claude",
+  "flow": [
+    {
+      "id": 1,
+      "module": "gateway:CustomWebHook",
+      "version": 1,
+      "parameters": {
+        "hook": null,
+        "maxResults": 1
+      },
+      "mapper": {},
+      "metadata": {
+        "designer": { "x": 0, "y": 0 },
+        "restore": { "parameters": { "hook": { "label": "GitHub Issue Webhook" } } },
+        "notes": "Receives GitHub issue.labeled webhook events. Set webhook URL in GitHub repo Settings → Webhooks. Content type: application/json"
+      }
+    },
+    {
+      "id": 2,
+      "module": "builtin:BasicFeeder",
+      "version": 1,
+      "parameters": {},
+      "filter": {
+        "name": "Only 'ai-code' label",
+        "conditions": [
+          [{ "a": "{{1.action}}", "b": "labeled", "o": "text:equal" }],
+          [{ "a": "{{1.label.name}}", "b": "ai-code", "o": "text:equal" }]
+        ]
+      },
+      "mapper": {},
+      "metadata": {
+        "designer": { "x": 300, "y": 0 },
+        "notes": "Filter: only process issues labeled 'ai-code'"
+      }
+    },
+    {
+      "id": 3,
+      "module": "openai-gpt-3:transformTextToStructuredData",
+      "version": 1,
+      "parameters": { "account": "__OPENAI_CONNECTION_ID__" },
+      "mapper": {
+        "model": "gpt-4o-mini",
+        "input": "Classify this GitHub issue by complexity.\n\nTitle: {{1.issue.title}}\nBody: {{1.issue.body}}\nLabels: {{join(map(1.issue.labels; 'name'); ', ')}}\n\nReturn JSON: {\"complexity\": \"simple|medium|complex\", \"reason\": \"...\", \"model\": \"qwen2.5-coder:7b|claude-haiku|claude-sonnet\", \"local\": true|false}",
+        "outputStructure": [
+          { "name": "complexity", "type": "text" },
+          { "name": "reason", "type": "text" },
+          { "name": "model", "type": "text" },
+          { "name": "local", "type": "boolean" }
+        ],
+        "systemContent": "You are a task complexity classifier. Classify strictly based on: simple=tests/typos/boilerplate, medium=features/refactors, complex=architecture/security/auth/cryptography. Always return valid JSON."
+      },
+      "metadata": {
+        "designer": { "x": 600, "y": 0 },
+        "notes": "OpenAI classifies task complexity using gpt-4o-mini (cheap)"
+      }
+    },
+    {
+      "id": 4,
+      "module": "http:MakeRequest",
+      "version": 4,
+      "parameters": { "authenticationType": "noAuth" },
+      "mapper": {
+        "url": "{{if(3.local; '__COVIBE_ROUTER_URL__/execute'; '__COVIBE_ROUTER_URL__/execute')}}",
+        "method": "post",
+        "headers": [
+          { "name": "Content-Type", "value": "application/json" }
+        ],
+        "contentType": "json",
+        "inputMethod": "jsonString",
+        "jsonStringBodyContent": "{\"title\": \"{{1.issue.title}}\", \"body\": \"{{1.issue.body}}\", \"repo\": \"__GITHUB_REPO__\", \"task_id\": \"make-{{1.issue.number}}\"}",
+        "parseResponse": true,
+        "stopOnHttpError": false,
+        "allowRedirects": true,
+        "shareCookies": false,
+        "requestCompressedContent": true,
+        "timeout": 120
+      },
+      "metadata": {
+        "designer": { "x": 900, "y": 0 },
+        "notes": "Calls covibe-router. For simple tasks: Ollama (local, free). For complex: Claude."
+      }
+    },
+    {
+      "id": 5,
+      "module": "http:MakeRequest",
+      "version": 4,
+      "parameters": { "authenticationType": "noAuth" },
+      "mapper": {
+        "url": "https://api.github.com/repos/__GITHUB_REPO__/issues/{{1.issue.number}}/comments",
+        "method": "post",
+        "headers": [
+          { "name": "Authorization", "value": "Bearer __GITHUB_TOKEN__" },
+          { "name": "Content-Type", "value": "application/json" },
+          { "name": "X-GitHub-Api-Version", "value": "2022-11-28" }
+        ],
+        "contentType": "json",
+        "inputMethod": "jsonString",
+        "jsonStringBodyContent": "{\"body\": \"## 🤖 LLM Router Result\\n\\n| | |\\n|---|---|\\n| Complexity | {{3.complexity}} |\\n| Model | `{{3.model}}` |\\n| Local (free) | {{3.local}} |\\n| Reason | {{3.reason}} |\\n\\n### Generated Code\\n\\n```\\n{{4.result}}\\n```\"}",
+        "parseResponse": true,
+        "stopOnHttpError": false,
+        "allowRedirects": true,
+        "shareCookies": false,
+        "requestCompressedContent": true
+      },
+      "metadata": {
+        "designer": { "x": 1200, "y": 0 },
+        "notes": "Posts generated code as GitHub issue comment"
+      }
+    },
+    {
+      "id": 6,
+      "module": "http:MakeRequest",
+      "version": 4,
+      "parameters": { "authenticationType": "noAuth" },
+      "mapper": {
+        "url": "https://api.github.com/repos/__GITHUB_REPO__/issues/{{1.issue.number}}/labels",
+        "method": "post",
+        "headers": [
+          { "name": "Authorization", "value": "Bearer __GITHUB_TOKEN__" },
+          { "name": "Content-Type", "value": "application/json" },
+          { "name": "X-GitHub-Api-Version", "value": "2022-11-28" }
+        ],
+        "contentType": "json",
+        "inputMethod": "jsonString",
+        "jsonStringBodyContent": "{\"labels\": [\"{{if(3.local; 'ai-coded-local'; 'ai-coded-claude')}}\"]}",
+        "parseResponse": true,
+        "stopOnHttpError": false,
+        "allowRedirects": true,
+        "shareCookies": false,
+        "requestCompressedContent": true
+      },
+      "metadata": {
+        "designer": { "x": 1500, "y": 0 },
+        "notes": "Adds label: ai-coded-local (free) or ai-coded-claude"
+      }
+    },
+    {
+      "id": 7,
+      "module": "notion:CreateDatabasePageAdvanced",
+      "version": 2,
+      "parameters": {
+        "connection": "__NOTION_CONNECTION_ID__",
+        "database": "__NOTION_DATABASE_ID__"
+      },
+      "mapper": {
+        "properties": [
+          { "name": "Task", "type": "title", "value": "{{1.issue.title}}" },
+          { "name": "Issue", "type": "number", "value": "{{1.issue.number}}" },
+          { "name": "Complexity", "type": "select", "value": "{{3.complexity}}" },
+          { "name": "Model", "type": "rich_text", "value": "{{3.model}}" },
+          { "name": "Local", "type": "checkbox", "value": "{{3.local}}" },
+          { "name": "Cost", "type": "number", "value": "{{ifempty(4.cost_usd; 0)}}" },
+          { "name": "Status", "type": "select", "value": "Done" }
+        ]
+      },
+      "metadata": {
+        "designer": { "x": 1800, "y": 0 },
+        "notes": "Logs to Notion: task, model used, cost, complexity"
+      }
+    }
+  ],
+  "metadata": {
+    "instant": true,
+    "version": 1,
+    "scenario": {
+      "roundtrips": 1,
+      "maxErrors": 3,
+      "autoCommit": true,
+      "autoCommitTriggerLast": true,
+      "sequential": false,
+      "slots": null,
+      "confidential": false,
+      "dataloss": false,
+      "dlq": false,
+      "freshVariables": false
+    },
+    "designer": {
+      "orphans": []
+    }
+  }
+}

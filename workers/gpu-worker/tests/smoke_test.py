@@ -22,7 +22,7 @@ from PIL import Image
 # Adjust path so we can import core.* when running from workers/gpu-worker/
 sys.path.insert(0, ".")
 
-from core.seal.pixelseal import embed_watermark, extract_watermark, verify_watermark
+from core.seal.pixelseal import embed_watermark, verify_watermark
 from core.mist.mist_v2 import apply_mist_v2
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")

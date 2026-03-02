@@ -1,0 +1,30 @@
+# =============================================================================
+# lore-anchor GPU Worker - Docker Ignore
+# =============================================================================
+
+# Test files
+tests/
+test_*.py
+pytest.ini
+.pytest_cache/
+
+# Development files
+Dockerfile.cpu
+docker-compose*.yml
+.env
+.env.*
+*.md
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store

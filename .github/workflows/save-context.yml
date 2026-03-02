@@ -1,0 +1,153 @@
+name: 🧠 Save AI Work Context
+
+# Auto-saves AI work context to GitHub after each significant action.
+# Any AI agent can read .github/AI_CONTEXT.md to pick up work seamlessly.
+
+on:
+  # After any AI-coded issue is resolved
+  issues:
+    types: [closed, labeled]
+  # After any workflow run
+  workflow_run:
+    workflows: ["🤖 Hybrid LLM Auto-Coder", "🤖 Full Marketing Automation (Zero-Touch)"]
+    types: [completed]
+  # Daily summary
+  schedule:
+    - cron: '0 15 * * *'  # JST 00:00 — midnight summary
+  workflow_dispatch:
+    inputs:
+      context_note:
+        description: 'Note to add to AI context'
+        required: false
+
+jobs:
+  save-context:
+    name: Update AI Context
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 20  # Get recent commits for context
+
+      - name: Gather context
+        id: ctx
+        run: |
+          echo "timestamp=$(TZ=Asia/Tokyo date '+%Y-%m-%d %H:%M JST')" >> $GITHUB_OUTPUT
+          echo "commit=$(git log -1 --format='%h %s')" >> $GITHUB_OUTPUT
+          echo "recent_work<<EOF" >> $GITHUB_OUTPUT
+          git log --oneline -10 >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Count open ai-code issues
+        id: issues
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'ai-code',
+              state: 'open',
+            });
+            core.setOutput('count', data.length);
+            core.setOutput('titles', data.map(i => `- #${i.number}: ${i.title}`).join('\n'));
+
+      - name: Update AI_CONTEXT.md
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = '.github/AI_CONTEXT.md';
+            let content = fs.readFileSync(path, 'utf8');
+
+            const timestamp = '${{ steps.ctx.outputs.timestamp }}';
+            const commit = '${{ steps.ctx.outputs.commit }}';
+            const note = '${{ github.event.inputs.context_note }}' || '';
+            const recentWork = `${{ steps.ctx.outputs.recent_work }}`;
+            const openIssues = '${{ steps.issues.outputs.count }}';
+            const issueTitles = `${{ steps.issues.outputs.titles }}`;
+            const trigger = context.eventName;
+
+            const entry = [
+              `### ${timestamp}`,
+              `- Trigger: \`${trigger}\``,
+              `- Latest commit: \`${commit}\``,
+              openIssues > 0 ? `- Open ai-code issues (${openIssues}):\n${issueTitles}` : '- No open ai-code issues',
+              note ? `- Note: ${note}` : '',
+              `\`\`\``,
+              recentWork,
+              `\`\`\``,
+              '',
+            ].filter(Boolean).join('\n');
+
+            // Append to history section
+            content = content.replace(
+              '<!-- Auto-appended by .github/workflows/save-context.yml -->',
+              `<!-- Auto-appended by .github/workflows/save-context.yml -->\n${entry}`
+            );
+
+            // Keep history to last 20 entries (prevent file bloat)
+            const entries = content.match(/### \d{4}-\d{2}-\d{2}/g) || [];
+            if (entries.length > 20) {
+              const lines = content.split('\n');
+              const markers = [];
+              lines.forEach((l, i) => { if (l.match(/^### \d{4}-\d{2}-\d{2}/)) markers.push(i); });
+              if (markers.length > 20) {
+                content = content.split('\n').slice(0, markers[markers.length - 20]).join('\n') +
+                          '\n' + content.split('\n').slice(markers[markers.length - 20]).join('\n');
+              }
+            }
+
+            fs.writeFileSync(path, content);
+
+      - name: Create context snapshot issue
+        if: github.event.workflow_run.conclusion == 'success' || github.event_name == 'schedule'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Only create one context issue per day
+            const today = new Date().toISOString().slice(0, 10);
+            const { data: existing } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'ai-context',
+              state: 'open',
+            });
+
+            const todayIssue = existing.find(i => i.title.includes(today));
+            if (todayIssue) {
+              // Update existing
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: todayIssue.number,
+                body: `## Context Update — ${{ steps.ctx.outputs.timestamp }}\n\n` +
+                      `Latest: \`${{ steps.ctx.outputs.commit }}\`\n\n` +
+                      `\`\`\`\n${{ steps.ctx.outputs.recent_work }}\n\`\`\``
+              });
+            } else {
+              // Create new daily context issue
+              const fs = require('fs');
+              const contextContent = fs.readFileSync('.github/AI_CONTEXT.md', 'utf8');
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `🧠 AI Context Snapshot — ${today}`,
+                body: `## AI Agent Handoff Context\n\n` +
+                      `> Any AI can pick up work from this snapshot.\n\n` +
+                      contextContent.slice(0, 60000),
+                labels: ['ai-context'],
+              });
+            }
+
+      - name: Commit context update
+        run: |
+          git config user.name "Context Bot"
+          git config user.email "context-bot@lore-anchor.com"
+          git add .github/AI_CONTEXT.md
+          git diff --staged --quiet || git commit -m "chore: update AI context snapshot [skip ci]"
+          git push

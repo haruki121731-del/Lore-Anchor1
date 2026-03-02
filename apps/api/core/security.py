@@ -47,7 +47,7 @@ def _decode_token(token: str, settings: Settings) -> dict[str, Any]:
     try:
         payload: dict[str, Any] = jwt.decode(
             token,
-            settings.SUPABASE_SERVICE_ROLE_KEY,
+            settings.JWT_SECRET,
             algorithms=[_ALGORITHM],
             audience=_AUDIENCE,
         )

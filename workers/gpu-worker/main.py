@@ -5,7 +5,8 @@ Pulls tasks from Redis queue (BLPOP on ``lore_anchor_tasks``), executes
 the defense pipeline:
   Step 1: PixelSeal (invisible watermark)
   Step 2: Mist v2 (adversarial perturbation)
-  Step 3: C2PA signing
+  Step 3: Verify watermark survived Mist
+  Step 4: C2PA signing
 
 After processing, updates Supabase ``images`` status and records
 progress in the ``tasks`` table.
@@ -19,21 +20,25 @@ import platform
 import signal
 import sys
 import tempfile
+import threading
+import time
 import traceback
 import uuid
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import redis
 import torch
 from dotenv import load_dotenv
 from PIL import Image
 from supabase import Client, create_client
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from core.c2pa_sign import sign_c2pa
 from core.mist.mist_v2 import apply_mist_v2
-from core.seal.pixelseal import embed_watermark
+from core.seal.pixelseal import embed_watermark, verify_watermark
 from core.storage import download_from_r2, upload_to_r2
 
 load_dotenv()
@@ -52,11 +57,91 @@ MIST_EPSILON: int = int(os.getenv("MIST_EPSILON", "8"))
 MIST_STEPS: int = int(os.getenv("MIST_STEPS", "3"))
 R2_PUBLIC_DOMAIN: str = os.getenv("R2_PUBLIC_DOMAIN", "")
 WORKER_ID: str = platform.node()
+HEALTH_PORT: int = int(os.getenv("HEALTH_PORT", "8080"))
+IDLE_TIMEOUT_S: int = int(os.getenv("IDLE_TIMEOUT_S", "900"))  # 15 min default
 
 # Must match apps/api/services/queue.py QUEUE_KEY
 QUEUE_KEY: str = "lore_anchor_tasks"
+DEAD_LETTER_KEY: str = "lore_anchor_dead_letters"
 
 _shutdown_requested: bool = False
+_processing: bool = False
+_images_processed: int = 0
+_images_failed: int = 0
+_last_task_time: float = time.monotonic()
+_worker_start_time: float = time.monotonic()
+
+# ---------------------------------------------------------------------------
+# Required environment variables
+# ---------------------------------------------------------------------------
+_REQUIRED_ENV_VARS: list[str] = [
+    "REDIS_URL",
+    "SUPABASE_URL",
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "R2_ACCOUNT_ID",
+    "R2_ACCESS_KEY_ID",
+    "R2_SECRET_ACCESS_KEY",
+    "R2_BUCKET_NAME",
+]
+
+
+def _validate_env() -> None:
+    """Check that all required environment variables are set. Exit on failure."""
+    missing = [v for v in _REQUIRED_ENV_VARS if not os.getenv(v)]
+    if missing:
+        logger.critical(
+            "Missing required environment variables: %s. "
+            "Set these before starting the worker.",
+            ", ".join(missing),
+        )
+        sys.exit(1)
+    logger.info("Environment validation passed")
+
+
+class PipelineStepError(Exception):
+    """Raised when a specific pipeline step fails."""
+
+    def __init__(self, step: str, original: Exception) -> None:
+        self.step = step
+        self.original = original
+        super().__init__(f"Step: {step} | Error: {original}")
+
+
+# ---------------------------------------------------------------------------
+# Health check HTTP server (background thread)
+# ---------------------------------------------------------------------------
+class _HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        if self.path == "/health":
+            body = json.dumps({
+                "status": "ok",
+                "worker_id": WORKER_ID,
+                "processing": _processing,
+                "images_processed": _images_processed,
+                "images_failed": _images_failed,
+                "uptime_s": round(time.monotonic() - _worker_start_time, 1),
+            }).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+        pass  # suppress access logs
+
+
+def _start_health_server() -> None:
+    """Start a background HTTP health check server."""
+    try:
+        server = HTTPServer(("0.0.0.0", HEALTH_PORT), _HealthHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        logger.info("Health check server started on port %d", HEALTH_PORT)
+    except Exception:
+        logger.warning("Failed to start health check server on port %d", HEALTH_PORT, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +156,30 @@ def _init_supabase() -> Client:
     return create_client(url, key)
 
 
+# ---------------------------------------------------------------------------
+# DB operations with retry (tenacity)
+# ---------------------------------------------------------------------------
+_db_retry = retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    reraise=True,
+)
+
+
+@_db_retry
+def _get_image_status(sb: Client, image_id: str) -> str | None:
+    """Fetch the current status of an image from Supabase."""
+    try:
+        result = sb.table("images").select("status").eq("id", image_id).execute()
+        if result.data:
+            return result.data[0]["status"]
+        return None
+    except Exception:
+        logger.exception("Failed to fetch image status for image_id=%s", image_id)
+        raise
+
+
+@_db_retry
 def _update_image_status(
     sb: Client,
     image_id: str,
@@ -78,6 +187,7 @@ def _update_image_status(
     *,
     protected_url: str | None = None,
     watermark_id: str | None = None,
+    c2pa_manifest: dict[str, Any] | None = None,
 ) -> None:
     """Update the ``images`` row for *image_id* in Supabase."""
     data: dict[str, Any] = {"status": status}
@@ -85,13 +195,17 @@ def _update_image_status(
         data["protected_url"] = protected_url
     if watermark_id is not None:
         data["watermark_id"] = watermark_id
+    if c2pa_manifest is not None:
+        data["c2pa_manifest"] = c2pa_manifest
     try:
         sb.table("images").update(data).eq("id", image_id).execute()
         logger.info("images.status -> '%s' for image_id=%s", status, image_id)
     except Exception:
         logger.exception("Failed to update images status for image_id=%s", image_id)
+        raise
 
 
+@_db_retry
 def _insert_task(sb: Client, image_id: str) -> str | None:
     """Insert a new row into ``tasks`` and return its id."""
     try:
@@ -109,9 +223,10 @@ def _insert_task(sb: Client, image_id: str) -> str | None:
         return task_id
     except Exception:
         logger.exception("Failed to insert tasks row for image_id=%s", image_id)
-        return None
+        raise
 
 
+@_db_retry
 def _complete_task(sb: Client, task_id: str) -> None:
     """Mark a task as completed."""
     try:
@@ -120,8 +235,10 @@ def _complete_task(sb: Client, task_id: str) -> None:
         }).eq("id", task_id).execute()
     except Exception:
         logger.exception("Failed to update task completed_at for task_id=%s", task_id)
+        raise
 
 
+@_db_retry
 def _fail_task(sb: Client, task_id: str, error_msg: str) -> None:
     """Record an error on the task."""
     try:
@@ -130,6 +247,25 @@ def _fail_task(sb: Client, task_id: str, error_msg: str) -> None:
         }).eq("id", task_id).execute()
     except Exception:
         logger.exception("Failed to update task error_log for task_id=%s", task_id)
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Dead-letter queue helper
+# ---------------------------------------------------------------------------
+def _send_to_dlq(r: redis.Redis, payload: str, error: str) -> None:  # type: ignore[type-arg]
+    """Push a failed/invalid task to the dead-letter queue."""
+    dlq_entry = json.dumps({
+        "original_payload": payload,
+        "error": error[:2000],
+        "worker_id": WORKER_ID,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+    try:
+        r.rpush(DEAD_LETTER_KEY, dlq_entry)
+        logger.info("Sent invalid payload to DLQ: %s", error[:200])
+    except Exception:
+        logger.exception("Failed to send to DLQ")
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +283,7 @@ def _log_gpu_info() -> None:
         logger.info("GPU count: %d", device_count)
         for i in range(device_count):
             name = torch.cuda.get_device_name(i)
-            mem = torch.cuda.get_device_properties(i).total_mem
+            mem = torch.cuda.get_device_properties(i).total_memory
             mem_gb = mem / (1024**3)
             logger.info("  GPU %d: %s (%.1f GB VRAM)", i, name, mem_gb)
         logger.info("Current device: %s", torch.cuda.current_device())
@@ -156,17 +292,42 @@ def _log_gpu_info() -> None:
 
 
 # ---------------------------------------------------------------------------
+# VAE pre-download
+# ---------------------------------------------------------------------------
+def _preload_models(device: torch.device) -> None:
+    """Load VAE model from baked-in HuggingFace cache (no network required)."""
+    hf_home = os.getenv("HF_HOME", "~/.cache/huggingface")
+    logger.info("HF_HOME=%s", hf_home)
+    try:
+        from core.mist.mist_v2 import _get_vae
+        logger.info("Pre-loading VAE model (local_files_only=True)...")
+        _get_vae(device)
+        logger.info("VAE model pre-loaded successfully")
+    except Exception:
+        logger.error(
+            "Failed to pre-load VAE model. "
+            "Ensure the model is baked into the Docker image at HF_HOME=%s. "
+            "The worker will fall back to freq mode for Mist v2.",
+            hf_home,
+            exc_info=True,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Pipeline
 # ---------------------------------------------------------------------------
-def process_image(image_id: str, original_r2_key: str) -> dict[str, str]:
+def process_image(image_id: str, original_r2_key: str) -> dict[str, str | dict[str, Any] | None]:
     """Execute the full defense pipeline for a single image.
+
+    Each step is wrapped individually so that failures report the exact
+    step name.  On failure a ``PipelineStepError`` is raised.
 
     Args:
         image_id: UUID of the image record in Supabase.
         original_r2_key: R2 object key for the original uploaded image.
 
     Returns:
-        dict with ``protected_r2_key`` and ``watermark_id``.
+        dict with ``protected_r2_key``, ``watermark_id``, and ``c2pa_manifest``.
     """
     logger.info("Starting pipeline for image_id=%s", image_id)
 
@@ -182,28 +343,31 @@ def process_image(image_id: str, original_r2_key: str) -> dict[str, str]:
         protected_path = tmp / "protected.png"
         signed_path = tmp / "signed.png"
 
-        # --- Download original from R2 ---
-        logger.info("Downloading original image from R2: %s", original_r2_key)
-        download_from_r2(original_r2_key, str(original_path))
-
-        image = Image.open(original_path).convert("RGB")
-
-        # --- Step 1: PixelSeal watermark ---
-        logger.info("Step 1: Embedding PixelSeal watermark (id=%s)", watermark_id)
+        # --- Step: download ---
         try:
+            logger.info("Step: download — fetching from R2: %s", original_r2_key)
+            download_from_r2(original_r2_key, str(original_path))
+            image = Image.open(original_path).convert("RGB")
+            logger.info("Step completed: download for image_id=%s", image_id)
+        except Exception as exc:
+            raise PipelineStepError("download", exc) from exc
+
+        # --- Step: pixelseal ---
+        try:
+            logger.info("Step: pixelseal — embedding watermark (id=%s)", watermark_id)
             watermarked = embed_watermark(image, watermark_id, device=device)
             watermarked.save(watermarked_path)
-        except Exception:
-            logger.exception("PixelSeal watermark failed for image_id=%s", image_id)
-            raise
+            logger.info("Step completed: pixelseal for image_id=%s", image_id)
+        except Exception as exc:
+            raise PipelineStepError("pixelseal", exc) from exc
 
-        # --- Step 2: Mist v2 adversarial perturbation ---
-        logger.info(
-            "Step 2: Applying Mist v2 (epsilon=%d, steps=%d)",
-            MIST_EPSILON,
-            MIST_STEPS,
-        )
+        # --- Step: mist_v2 ---
         try:
+            logger.info(
+                "Step: mist_v2 — applying perturbation (epsilon=%d, steps=%d)",
+                MIST_EPSILON,
+                MIST_STEPS,
+            )
             protected = apply_mist_v2(
                 watermarked,
                 epsilon=MIST_EPSILON,
@@ -211,27 +375,51 @@ def process_image(image_id: str, original_r2_key: str) -> dict[str, str]:
                 device=device,
             )
             protected.save(protected_path)
-        except Exception:
-            logger.exception("Mist v2 failed for image_id=%s", image_id)
-            raise
+            logger.info("Step completed: mist_v2 for image_id=%s", image_id)
+        except Exception as exc:
+            raise PipelineStepError("mist_v2", exc) from exc
 
-        # --- Step 3: C2PA signing ---
-        logger.info("Step 3: Signing with C2PA")
+        # --- Step: verify_watermark (ensure watermark survived Mist) ---
         try:
-            sign_c2pa(str(protected_path), str(signed_path))
-        except Exception:
-            logger.exception("C2PA signing failed for image_id=%s", image_id)
+            logger.info("Step: verify_watermark — checking watermark integrity")
+            match, accuracy = verify_watermark(protected, watermark_id, backend="dwt")
+            if not match:
+                raise RuntimeError(
+                    f"Watermark destroyed by Mist (accuracy={accuracy:.1%}). "
+                    "Image would be unprotected."
+                )
+            logger.info(
+                "Step completed: verify_watermark — accuracy=%.1f%% for image_id=%s",
+                accuracy * 100,
+                image_id,
+            )
+        except RuntimeError:
             raise
+        except Exception as exc:
+            raise PipelineStepError("verify_watermark", exc) from exc
 
-        # --- Upload result to R2 ---
-        protected_r2_key = f"protected/{image_id}.png"
-        logger.info("Uploading protected image to R2: %s", protected_r2_key)
-        upload_to_r2(str(signed_path), protected_r2_key)
+        # --- Step: c2pa_sign ---
+        c2pa_manifest: dict[str, Any] | None = None
+        try:
+            logger.info("Step: c2pa_sign — signing image")
+            c2pa_manifest = sign_c2pa(str(protected_path), str(signed_path))
+            logger.info("Step completed: c2pa_sign for image_id=%s", image_id)
+        except Exception as exc:
+            raise PipelineStepError("c2pa_sign", exc) from exc
 
-    logger.info("Pipeline completed for image_id=%s", image_id)
+        # --- Step: upload ---
+        try:
+            protected_r2_key = f"protected/{image_id}.png"
+            logger.info("Step: upload — uploading to R2: %s", protected_r2_key)
+            upload_to_r2(str(signed_path), protected_r2_key)
+            logger.info("Step completed: upload for image_id=%s", image_id)
+        except Exception as exc:
+            raise PipelineStepError("upload", exc) from exc
+
     return {
         "protected_r2_key": protected_r2_key,
         "watermark_id": watermark_id,
+        "c2pa_manifest": c2pa_manifest,
     }
 
 
@@ -240,18 +428,32 @@ def process_image(image_id: str, original_r2_key: str) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 def _run_consumer() -> None:
     """Block on Redis ``BLPOP`` and process tasks one at a time."""
+    global _processing, _images_processed, _images_failed, _last_task_time
+
     r = redis.from_url(REDIS_URL, decode_responses=True)
     sb = _init_supabase()
-    logger.info("Connected to Redis, waiting for tasks on '%s'...", QUEUE_KEY)
+    logger.info("Worker started, listening on queue: %s", QUEUE_KEY)
+    if IDLE_TIMEOUT_S > 0:
+        logger.info("Idle timeout enabled: %d seconds", IDLE_TIMEOUT_S)
 
     while not _shutdown_requested:
         # BLPOP blocks for up to 5 seconds, then re-checks shutdown flag.
         result: tuple[str, str] | None = r.blpop(QUEUE_KEY, timeout=5)  # type: ignore[assignment]
         if result is None:
+            # Check idle timeout (scale-to-zero for SaladCloud GPU workers)
+            if IDLE_TIMEOUT_S > 0:
+                idle_s = time.monotonic() - _last_task_time
+                if idle_s >= IDLE_TIMEOUT_S:
+                    logger.info(
+                        "Idle timeout reached (%.0fs >= %ds). Shutting down for scale-to-zero.",
+                        idle_s, IDLE_TIMEOUT_S,
+                    )
+                    break
             continue
 
         _key, raw_payload = result
-        logger.info("Received task: %s", raw_payload)
+        _last_task_time = time.monotonic()
+        logger.info("Received raw task payload: %s", raw_payload)
 
         try:
             payload: dict[str, Any] = json.loads(raw_payload)
@@ -259,11 +461,41 @@ def _run_consumer() -> None:
             storage_key: str = payload["storage_key"]
         except (json.JSONDecodeError, KeyError) as exc:
             logger.error("Invalid task payload: %s — %s", raw_payload, exc)
+            _send_to_dlq(r, raw_payload, str(exc))
             continue
 
-        # --- Record task start in Supabase ---
-        _update_image_status(sb, image_id, "processing")
-        task_id = _insert_task(sb, image_id)
+        logger.info("Received task: image_id=%s", image_id)
+
+        # --- Dedup check: skip if already processing or completed ---
+        try:
+            current_status = _get_image_status(sb, image_id)
+        except Exception:
+            current_status = None
+        if current_status in ("processing", "completed"):
+            logger.warning(
+                "Skipping duplicate task: image_id=%s already has status='%s'",
+                image_id,
+                current_status,
+            )
+            continue
+        if current_status is None:
+            logger.warning(
+                "Image row not found for image_id=%s, processing anyway",
+                image_id,
+            )
+
+        # --- Mark as processing ---
+        _processing = True
+        t_start = time.monotonic()
+        try:
+            _update_image_status(sb, image_id, "processing")
+        except Exception:
+            logger.warning("Failed to set processing status, continuing anyway")
+        task_id = None
+        try:
+            task_id = _insert_task(sb, image_id)
+        except Exception:
+            logger.warning("Failed to insert task row, continuing anyway")
 
         try:
             result_data = process_image(image_id, storage_key)
@@ -277,25 +509,73 @@ def _run_consumer() -> None:
             )
 
             # --- Mark success in Supabase ---
-            _update_image_status(
-                sb,
-                image_id,
-                "completed",
-                protected_url=protected_url,
-                watermark_id=result_data["watermark_id"],
-            )
+            try:
+                _update_image_status(
+                    sb,
+                    image_id,
+                    "completed",
+                    protected_url=protected_url,
+                    watermark_id=result_data["watermark_id"],
+                    c2pa_manifest=cast(dict[str, Any] | None, result_data.get("c2pa_manifest")),
+                )
+            except Exception:
+                logger.error("Failed to mark image as completed after retries")
             if task_id:
-                _complete_task(sb, task_id)
+                try:
+                    _complete_task(sb, task_id)
+                except Exception:
+                    logger.error("Failed to mark task as completed after retries")
 
-            logger.info("Task completed: %s", result_data)
+            elapsed = time.monotonic() - t_start
+            _images_processed += 1
+            logger.info("Pipeline completed: image_id=%s in %.1fs", image_id, elapsed)
 
-        except Exception:
-            logger.exception("Pipeline failed for image_id=%s", image_id)
+        except PipelineStepError as exc:
+            elapsed = time.monotonic() - t_start
+            error_detail = f"Step: {exc.step} | Error: {exc.original}"
+            logger.error(
+                "Pipeline failed at step %s: image_id=%s | %s (%.1fs elapsed)",
+                exc.step,
+                image_id,
+                exc.original,
+                elapsed,
+            )
+            _images_failed += 1
 
             # --- Mark failure in Supabase ---
-            _update_image_status(sb, image_id, "failed")
+            try:
+                _update_image_status(sb, image_id, "failed")
+            except Exception:
+                logger.error("Failed to mark image as failed after retries")
             if task_id:
-                _fail_task(sb, task_id, traceback.format_exc())
+                try:
+                    _fail_task(sb, task_id, error_detail)
+                except Exception:
+                    logger.error("Failed to record task error after retries")
+
+        except Exception:
+            elapsed = time.monotonic() - t_start
+            error_detail = traceback.format_exc()
+            logger.exception(
+                "Pipeline failed (unexpected): image_id=%s (%.1fs elapsed)",
+                image_id,
+                elapsed,
+            )
+            _images_failed += 1
+
+            # --- Mark failure in Supabase ---
+            try:
+                _update_image_status(sb, image_id, "failed")
+            except Exception:
+                logger.error("Failed to mark image as failed after retries")
+            if task_id:
+                try:
+                    _fail_task(sb, task_id, error_detail)
+                except Exception:
+                    logger.error("Failed to record task error after retries")
+
+        finally:
+            _processing = False
 
     logger.info("Shutdown complete.")
 
@@ -304,28 +584,61 @@ def _run_consumer() -> None:
 # Entrypoint
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    # --- Startup diagnostics ---
-    logger.info("=" * 60)
-    logger.info("lore-anchor GPU Worker starting")
-    logger.info("=" * 60)
-    _log_gpu_info()
-    logger.info("Redis URL: %s", REDIS_URL.split("@")[-1])  # hide password
-    logger.info("Mist config: epsilon=%d, steps=%d", MIST_EPSILON, MIST_STEPS)
-    logger.info("Queue key: %s", QUEUE_KEY)
-    logger.info("=" * 60)
-
-    # --- Graceful shutdown on SIGTERM (SaladCloud sends this on stop) ---
-    def _handle_sigterm(signum: int, frame: Any) -> None:
-        global _shutdown_requested
-        logger.info("Received SIGTERM — shutting down gracefully")
-        _shutdown_requested = True
-
-    signal.signal(signal.SIGTERM, _handle_sigterm)
-
-    # --- Start BLPOP consumer loop ---
-    logger.info("Worker entering BLPOP loop (waiting for jobs)...")
     try:
+        # --- Validate environment ---
+        _validate_env()
+
+        # --- Startup diagnostics ---
+        logger.info("=" * 60)
+        logger.info("lore-anchor GPU Worker starting")
+        logger.info("=" * 60)
+        _log_gpu_info()
+        logger.info("Redis URL: %s", REDIS_URL.split("@")[-1])  # hide password
+        logger.info("Mist config: epsilon=%d, steps=%d", MIST_EPSILON, MIST_STEPS)
+        logger.info("Queue key: %s", QUEUE_KEY)
+        logger.info("Worker ID: %s", WORKER_ID)
+        logger.info("=" * 60)
+
+        # --- Start health check server ---
+        _start_health_server()
+
+        # --- Pre-load models ---
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        _preload_models(device)
+
+        # --- Graceful shutdown on SIGTERM (SaladCloud sends this on stop) ---
+        def _handle_sigterm(signum: int, frame: Any) -> None:
+            global _shutdown_requested
+            logger.info("Shutdown signal received, finishing current task...")
+            _shutdown_requested = True
+
+        signal.signal(signal.SIGTERM, _handle_sigterm)
+        signal.signal(signal.SIGINT, _handle_sigterm)
+
+        # --- Verify Redis connectivity before entering main loop ---
+        logger.info("Testing Redis connection...")
+        _test_r = redis.from_url(REDIS_URL, decode_responses=True)
+        _test_r.ping()
+        logger.info("Redis connection OK")
+        del _test_r
+
+        # --- Start BLPOP consumer loop ---
+        logger.info("Worker ready, entering consumer loop on queue: %s", QUEUE_KEY)
         _run_consumer()
+
     except KeyboardInterrupt:
         logger.info("KeyboardInterrupt — exiting")
-        sys.exit(0)
+    except SystemExit:
+        raise
+    except Exception:
+        logger.critical("Worker crashed during startup or operation", exc_info=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        time.sleep(3)  # allow SaladCloud to capture logs before container exits
+        sys.exit(1)
+    finally:
+        if _processing:
+            logger.info("Waiting for current task to finish before exit...")
+        logger.info("Worker stopped.")
+        sys.stdout.flush()
+        sys.stderr.flush()
