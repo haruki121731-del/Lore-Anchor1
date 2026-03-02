@@ -353,6 +353,25 @@ class DebugDatabaseService(DatabaseService):
         """Debug stub — always returns ``None`` (no tasks table)."""
         return None
 
+    def get_profile(self, user_id: str) -> dict[str, Any] | None:
+        """Debug stub — returns a mock profile for subscription testing."""
+        return {
+            "id": user_id,
+            "stripe_customer_id": None,
+            "subscription_tier": "free",
+            "subscription_status": "active",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def count_images_this_month(self, user_id: str, since: str) -> int:
+        """Debug stub — counts images created after the given timestamp."""
+        count = 0
+        for row in self._store.values():
+            if row["user_id"] == user_id and row.get("status") != "deleted":
+                if row["created_at"] >= since:
+                    count += 1
+        return count
+
 
 def get_database_service() -> DatabaseService:
     """Return a :class:`DatabaseService` instance.
