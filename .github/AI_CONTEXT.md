@@ -98,6 +98,23 @@ If you are an AI agent continuing this work:
 ## Context History
 
 <!-- Auto-appended by .github/workflows/save-context.yml -->
+### 2026-03-05 00:31 JST
+- Trigger: `schedule`
+- Latest commit: `5d35a5a chore: update AI context snapshot [skip ci]`
+- Open ai-code issues (1):
+- #43: [TEST] ai-code label trigger
+```
+5d35a5a chore: update AI context snapshot [skip ci]
+037f70f chore: update AI context snapshot [skip ci]
+6706607 feat: Hybrid LLM system (co-vibe + Ollama router) + AI context persistence
+b4975e6 chore: update AI context snapshot [skip ci]
+52e5937 chore: update AI context snapshot [skip ci]
+dbb6257 merge: PR #39 — CPU worker improvements + ROADMAP
+ad8d5eb merge: rebase PR #39 on updated main after PR #42 merge
+e012f52 chore: update AI context snapshot [skip ci]
+cb98a3f merge: PR #42 — billing, SaladCloud, landing page, CPU worker fix
+cbcb3f3 fix(ci): remove unused Path import in cpu-worker
+```
 ### 2026-03-04 00:39 JST
 - Trigger: `schedule`
 - Latest commit: `037f70f chore: update AI context snapshot [skip ci]`
