@@ -83,7 +83,7 @@ app.add_middleware(
 app.include_router(images.router, prefix="/api/v1")
 app.include_router(tasks_router, prefix="/api/v1")
 app.include_router(billing.router, prefix="/api/v1")
-app.include_router(subscriptions.router, prefix="/api/v1")
+app.include_router(subscriptions.router, prefix="/api/v1")r, prefix="/api/v1")
 
 
 # ------------------------------------------------------------------
