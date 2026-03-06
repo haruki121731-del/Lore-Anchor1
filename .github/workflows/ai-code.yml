@@ -17,6 +17,10 @@ on:
         options: [auto, fast, strong]
         default: auto
 
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   route-and-code:
     name: Classify & Auto-Code
@@ -105,73 +109,111 @@ jobs:
           script: |
             const complexity = '${{ steps.classify.outputs.complexity }}';
             const strategy = '${{ steps.classify.outputs.strategy }}';
-            const models = { simple: '🦙 Ollama qwen2.5-coder:7b (local, free)',
-                             medium: '⚡ Claude Haiku (cheap+fast)',
-                             complex: '🧠 Claude Sonnet (powerful)' };
+            const models = { simple: '🦙 Local LLM (Ollama qwen2.5-coder)',
+                             medium: '⚡ Free API (OpenRouter)',
+                             complex: '🧠 Claude Sonnet (API)' };
             const emojis = { simple: '🟢', medium: '🟡', complex: '🔴' };
+            
+            const hasOpenRouter = '${{ secrets.OPENROUTER_API_KEY }}' ? true : false;
+            const hasAnthropic = '${{ secrets.ANTHROPIC_API_KEY }}' ? true : false;
+            
+            let modelNote = models[complexity];
+            if (complexity !== 'simple' && !hasOpenRouter && !hasAnthropic) {
+              modelNote = '🦙 Local LLM (fallback - no API keys)';
+            }
+            
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: ${{ steps.issue.outputs.number }},
-              body: `## 🤖 LLM Router Decision\n\n` +
-                    `| Field | Value |\n|---|---|\n` +
-                    `| Complexity | ${emojis[complexity]} ${complexity} |\n` +
-                    `| Strategy | \`${strategy}\` |\n` +
-                    `| Model | ${models[complexity]} |\n` +
-                    `| Cost | ${complexity === 'simple' ? '**$0.00** (local!)' : 'API cost'} |\n\n` +
-                    `_Starting code generation..._`
+              body: `## 🤖 LLM Router Decision
+
+| Field | Value |
+|---|---|
+| Complexity | ${emojis[complexity]} ${complexity} |
+| Strategy | \`${strategy}\` |
+| Model | ${modelNote} |
+
+_Available APIs: OpenRouter=${hasOpenRouter}, Anthropic=${hasAnthropic}_
+
+_Starting code generation..._`
             });
 
-      # ── Python + co-vibe setup ─────────────────────────────────────────────
+      # ── Python + dependencies setup ─────────────────────────────────────────
       - uses: actions/setup-python@v5
         with: { python-version: '3.12', cache: pip }
 
       - name: Install dependencies
-        run: pip install anthropic openai groq httpx
+        run: pip install openai>=1.0.0
 
-      # ── Execute with appropriate model ────────────────────────────────────
-      - name: Generate code (Claude)
+      # ── Generate with OpenRouter (Free/Cheap models) ───────────────────────
+      - name: Generate code (OpenRouter)
         if: steps.classify.outputs.complexity != 'simple'
-        id: generate_claude
+        id: generate_openrouter
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           ISSUE_TITLE: ${{ steps.issue.outputs.title }}
           ISSUE_BODY: ${{ steps.issue.outputs.body }}
-          STRATEGY: ${{ steps.classify.outputs.strategy }}
         run: |
           python3 - << 'PYEOF'
-          import os, json
-          import anthropic
+          import os
+          import sys
+          from openai import OpenAI
 
           title = os.environ["ISSUE_TITLE"]
           body = os.environ["ISSUE_BODY"]
+          api_key = os.environ.get("OPENROUTER_API_KEY")
+          
+          if not api_key:
+              print("OPENROUTER_API_KEY not set, falling back to local model")
+              sys.exit(1)
 
-          client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-
-          model = "claude-sonnet-4-6" if os.environ["STRATEGY"] == "strong" else "claude-haiku-4-5-20251001"
-
-          message = client.messages.create(
-              model=model,
-              max_tokens=4096,
-              system="""You are an expert engineer on Lore-Anchor, an AI protection SaaS.
-          Stack: Next.js 14 (App Router), FastAPI, Supabase, TypeScript, Python.
-          Produce minimal, clean code. Show exact file paths and changes.""",
-              messages=[{
-                  "role": "user",
-                  "content": f"Implement this GitHub issue:\n\nTitle: {title}\n\nDetails:\n{body}\n\nProvide complete implementation with file paths."
-              }]
+          # 無料モデルを優先
+          free_models = [
+              "stepfun/step-3.5-flash:free",
+              "mistralai/mistral-small-3.1-24b-instruct:free",
+              "openai/gpt-oss-20b:free",
+          ]
+          
+          client = OpenAI(
+              base_url="https://openrouter.ai/api/v1",
+              api_key=api_key,
           )
-
-          result = message.content[0].text
+          
+          result = None
+          used_model = None
+          
+          for model in free_models:
+              try:
+                  print(f"Trying {model}...")
+                  completion = client.chat.completions.create(
+                      model=model,
+                      messages=[
+                          {"role": "system", "content": "You are an expert engineer. Provide minimal, clean code with exact file paths."},
+                          {"role": "user", "content": f"Implement this:\n\nTitle: {title}\n\nDetails:\n{body}\n\nProvide complete implementation with file paths."}
+                      ],
+                      timeout=120
+                  )
+                  result = completion.choices[0].message.content
+                  used_model = model
+                  print(f"Success with {model}")
+                  break
+              except Exception as e:
+                  print(f"Failed with {model}: {e}")
+                  continue
+          
+          if not result:
+              sys.exit(1)
+              
           with open("/tmp/code_result.md", "w") as f:
               f.write(result)
-          print(f"Generated {len(result)} chars using {model}")
+          print(f"Generated {len(result)} chars using {used_model}")
           PYEOF
+        continue-on-error: true
 
+      # ── Generate code (Ollama — local free) ────────────────────────────────
       - name: Generate code (Ollama — local free)
-        if: steps.classify.outputs.complexity == 'simple'
-        id: generate_ollama
+        if: steps.classify.outputs.complexity == 'simple' || steps.generate_openrouter.outcome == 'failure'
         env:
           ISSUE_TITLE: ${{ steps.issue.outputs.title }}
           ISSUE_BODY: ${{ steps.issue.outputs.body }}
@@ -182,35 +224,51 @@ jobs:
           sleep 5
 
           # Pull tiny model for CI (fast)
-          ollama pull qwen2.5-coder:1.5b
+          ollama pull qwen2.5-coder:1.5b || ollama pull tinyllama
 
           python3 - << 'PYEOF'
-          import os, json, urllib.request
+          import os
+          import json
+          import urllib.request
 
           title = os.environ["ISSUE_TITLE"]
           body = os.environ["ISSUE_BODY"]
 
           prompt = f"""You are an expert engineer. Implement this task:
 
-          Title: {title}
-          Details: {body}
+Title: {title}
+Details: {body}
 
-          Provide exact file paths and minimal code changes."""
+Provide exact file paths and minimal code changes."""
 
-          data = json.dumps({
-              "model": "qwen2.5-coder:1.5b",
-              "prompt": prompt,
-              "stream": False,
-              "options": {"temperature": 0.1}
-          }).encode()
+          models = ["qwen2.5-coder:1.5b", "tinyllama", "phi3:mini"]
+          result = None
+          
+          for model in models:
+              try:
+                  print(f"Trying local model: {model}")
+                  data = json.dumps({
+                      "model": model,
+                      "prompt": prompt,
+                      "stream": False,
+                      "options": {"temperature": 0.1}
+                  }).encode()
 
-          req = urllib.request.Request(
-              "http://localhost:11434/api/generate",
-              data=data,
-              headers={"Content-Type": "application/json"}
-          )
-          with urllib.request.urlopen(req, timeout=120) as resp:
-              result = json.loads(resp.read())["response"]
+                  req = urllib.request.Request(
+                      "http://localhost:11434/api/generate",
+                      data=data,
+                      headers={"Content-Type": "application/json"}
+                  )
+                  with urllib.request.urlopen(req, timeout=120) as resp:
+                      result = json.loads(resp.read())["response"]
+                  print(f"Success with {model}")
+                  break
+              except Exception as e:
+                  print(f"Failed with {model}: {e}")
+                  continue
+          
+          if not result:
+              result = "Code generation failed. Please implement manually."
 
           with open("/tmp/code_result.md", "w") as f:
               f.write(result)
@@ -228,16 +286,19 @@ jobs:
             catch { result = 'Code generation completed but output not captured.'; }
 
             const complexity = '${{ steps.classify.outputs.complexity }}';
-            const isLocal = complexity === 'simple';
+            const isLocal = '${{ steps.generate_openrouter.outcome }}' === 'failure' || complexity === 'simple';
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: ${{ steps.issue.outputs.number }},
-              body: `## ${isLocal ? '🦙 Local LLM' : '🧠 Claude'} Generated Code\n\n` +
-                    `${isLocal ? '> 💚 **$0.00 cost** — ran entirely on local Ollama\n\n' : ''}` +
-                    `${result.slice(0, 60000)}\n\n` +
-                    `---\n_To apply: copy the code above into your editor, or run \`make apply-issue-${{ steps.issue.outputs.number }}\`_`
+              body: `## ${isLocal ? '🦙 Local LLM' : '🤖 AI'} Generated Code
+
+${isLocal ? '> 💚 **$0.00 cost** — ran on local Ollama\n\n' : ''}
+${result.slice(0, 60000)}
+
+---
+_To apply: copy the code above into your editor_`
             });
 
             // Label the issue
@@ -245,5 +306,5 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: ${{ steps.issue.outputs.number }},
-              labels: [isLocal ? 'ai-coded-local' : 'ai-coded-claude']
+              labels: [isLocal ? 'ai-coded-local' : 'ai-coded']
             });
