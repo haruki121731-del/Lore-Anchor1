@@ -95,7 +95,20 @@ def _validate_env() -> None:
             ", ".join(missing),
         )
         sys.exit(1)
-    logger.info("Environment validation passed")
+    logger.info("All required environment variables present.")
+
+
+# ---------------------------------------------------------------------------
+# Initialize clients
+# ---------------------------------------------------------------------------
+_validate_env()
+
+redis_client: redis.Redis = redis.from_url(REDIS_URL)
+supabase: Client = create_client(
+    os.getenv("SUPABASE_URL", ""),
+    os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""),
+)
+logger.info("Redis and Supabase clients initialized.")("Environment validation passed")
 
 
 class PipelineStepError(Exception):
